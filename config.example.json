@@ -1,0 +1,10 @@
+{
+    "UNTIS_SERVER": "demo.webuntis.com",
+    "UNTIS_SCHOOL": "muster_schule",
+    "UNTIS_USER": "benutzername",
+    "UNTIS_PASS": "passwort",
+    "ROOM_NAME": "Raum101",
+    "AUTO_UPDATE_SECONDS": 900,
+    "DISPLAY_ACTIVE": true,
+    "TOUCH_ACTIVE": true
+}
