@@ -39,6 +39,7 @@ CONFIG_FILE = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'config.
 
 # Globale Flags & Variablen
 force_update_flag = False
+show_demo_once = False       # NEU: Flag fuer den einmaligen Demo-Modus
 shutdown_event = threading.Event()   
 display_lock = threading.Lock()      
 
@@ -126,12 +127,11 @@ def get_current_lesson(conf):
         now = datetime.datetime.now()
         now_time = now.time()
         
-        # --- NEU 1: Wochenende und Feiertage / leere Tage abfangen ---
-        if now.weekday() >= 5: # 5 = Samstag, 6 = Sonntag
+        # Wochenende und Feiertage / leere Tage abfangen
+        if now.weekday() >= 5: 
             return None, "Schönes Wochenende!"
             
         if not timetable:
-            # WebUntis liefert für Feiertage, Brückentage und Ferien eine leere Liste!
             return None, "Unterrichtsfrei"
         
         current_lesson = None
@@ -150,16 +150,19 @@ def get_current_lesson(conf):
             }
             start_str = current_lesson.start.strftime("%H:%M")
             stunde = raster.get(start_str, "")
+            
+            status_code = getattr(current_lesson, 'code', None)
+            
             result_data = {
                 "fach": ", ".join([s.name for s in current_lesson.subjects]),
                 "lehrer": ", ".join([t.name for t in current_lesson.teachers]),
                 "klasse": ", ".join([k.name for k in current_lesson.klassen]),
                 "zeit": f"{start_str} - {current_lesson.end.strftime('%H:%M')}",
-                "stunde": f"{stunde} Stunde" if stunde else ""
+                "stunde": f"{stunde} Stunde" if stunde else "",
+                "status_code": status_code
             }
             return result_data, None
             
-        # --- NEU 2: Erweiterte Statusmeldungen (Pausen & Randzeiten) ---
         if datetime.time(9, 35) <= now_time < datetime.time(9, 50):
             return None, "1. Pause"
         elif datetime.time(11, 30) <= now_time < datetime.time(11, 40):
@@ -171,7 +174,6 @@ def get_current_lesson(conf):
         elif now_time >= datetime.time(15, 30):
             return None, "Unterrichtsende"
             
-        # Nur echte Freistunden mitten am Schultag landen hier:
         return None, "Raum ist frei"
         
     except Exception as e:
@@ -221,9 +223,22 @@ def update_display_logic(lesson_data, message, conf):
                 draw.text((5, 40), lesson_data['stunde'], font=f_med, fill=0)
                 draw.text((120, 40), lesson_data['zeit'], font=f_med, fill=0)
                 
-                main_info = f"{lesson_data['fach']} | {lesson_data['klasse']}"
-                draw.text((5, 75), main_info, font=f_large, fill=0)
-                draw.text((120, 75), lesson_data['lehrer'], font=f_large, fill=0)
+                status = lesson_data.get('status_code')
+                
+                if status == 'cancelled':
+                    draw.rectangle((5, 70, 110, 95), fill=0)
+                    draw.text((10, 74), "FÄLLT AUS", font=f_med, fill=255)
+                    draw.text((120, 75), lesson_data['klasse'], font=f_large, fill=0)
+                elif status == 'irregular':
+                    main_info = f"{lesson_data['fach']} | {lesson_data['klasse']}"
+                    draw.text((5, 75), main_info, font=f_large, fill=0)
+                    draw.rectangle((120, 62, 195, 75), fill=0)
+                    draw.text((123, 62), "Vertretung", font=f_small, fill=255)
+                    draw.text((120, 78), lesson_data['lehrer'], font=f_large, fill=0)
+                else:
+                    main_info = f"{lesson_data['fach']} | {lesson_data['klasse']}"
+                    draw.text((5, 75), main_info, font=f_large, fill=0)
+                    draw.text((120, 75), lesson_data['lehrer'], font=f_large, fill=0)
             else:
                 wochentage = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
                 draw.text((5, 40), wochentage[now.weekday()], font=f_med, fill=0)
@@ -253,12 +268,10 @@ def clear_display_once():
 # ==========================================
 
 def background_loop():
-    global force_update_flag
+    global force_update_flag, show_demo_once
     last_update = 0
     last_touch_time = time.time()
     last_minute_triggered = None
-    
-    # NEU: Speichert das Datum des letzten Feiertags/Wochenendes
     last_static_date = None
     
     update_times = [
@@ -300,26 +313,38 @@ def background_loop():
             elif force_update_flag:
                 print(f"[{current_hm}] MANUELLES Update!")
             
-            # Zustand speichern, bevor das Flag zurückgesetzt wird
             is_manual = force_update_flag 
             force_update_flag = False
             
             if conf.get('DISPLAY_ACTIVE', True):
-                data, err = get_current_lesson(conf)
+                # DEMO-MODUS ABFANGEN
+                if show_demo_once:
+                    data = {
+                        "fach": "Informatik",
+                        "lehrer": "Ab",
+                        "klasse": "11A",
+                        "zeit": "09:55 - 10:40",
+                        "stunde": "3. Stunde",
+                        "status_code": "irregular"
+                    }
+                    err = None
+                    show_demo_once = False # Direkt wieder abschalten fuer das naechste Mal
+                    print(f"[{current_hm}] DEMO-DATEN werden einmalig angezeigt.")
+                else:
+                    data, err = get_current_lesson(conf)
                 
-                # --- NEU: Ruhemodus an Wochenenden und Feiertagen ---
+                # Ruhemodus an Wochenenden und Feiertagen
                 current_date = datetime.date.today().strftime("%Y-%m-%d")
                 is_static_day = err in ["Schönes Wochenende!", "Unterrichtsfrei"]
                 
                 skip_update = False
                 if is_static_day and not is_manual:
                     if last_static_date == current_date:
-                        print(f"[{current_hm}] Ruhemodus aktiv ({err}). Display-Update uebersprungen.")
                         skip_update = True
                     else:
-                        last_static_date = current_date # Einmaliges Update pro Tag zulassen
+                        last_static_date = current_date 
                 else:
-                    last_static_date = None # Reset an normalen Schultagen
+                    last_static_date = None 
                     
                 if not skip_update:
                     update_display_logic(data, err, conf)
@@ -354,12 +379,10 @@ HTML_TEMPLATE = """
         .btn-group { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 25px; }
         .btn { display: block; text-decoration: none; text-align: center; padding: 15px; border-radius: 12px; font-weight: bold; color: white; transition: transform 0.1s; border: none; cursor: pointer; }
         .btn:active { transform: scale(0.98); }
-        
-        /* HIER SIND DIE NEUEN, EINFACHEN FARBEN */
-        .btn-update { background-color: #007BFF; } /* Blau */
-        .btn-off { background-color: #DC3545; }    /* Rot */
-        .btn-on { background-color: #28A745; }     /* Grün */
-        
+        .btn-update { background-color: #007BFF; } 
+        .btn-demo { background-color: #6f42c1; } /* LILA FUER DEMO */
+        .btn-off { background-color: #DC3545; }    
+        .btn-on { background-color: #28A745; }     
         .btn-save { background-color: #0f172a; width: 100%; font-size: 16px; margin-top: 10px; color: white; padding: 15px; border-radius: 12px; font-weight: bold; }
         .form-group { margin-bottom: 20px; }
         label { display: block; font-size: 10px; font-weight: 800; color: #94a3b8; text-transform: uppercase; margin-bottom: 5px; }
@@ -383,15 +406,19 @@ HTML_TEMPLATE = """
                     Die Datei 'config.json' konnte nicht gelesen werden.
                 </div>
             {% endif %}
+            
+            <!-- NEU: Das 2x2 Grid fuer die Knoepfe -->
             <div class="btn-group">
                 <a href="/update" class="btn btn-update">Update</a>
+                <a href="/demo" class="btn btn-demo">Demo-Daten</a>
                 <a href="/toggle" class="btn {% if conf.get('DISPLAY_ACTIVE', True) %}btn-off{% else %}btn-on{% endif %}">
                     {% if conf.get('DISPLAY_ACTIVE', True) %}Display aus{% else %}Display an{% endif %}
                 </a>
-                <a href="/toggle_touch" class="btn {% if conf.get('TOUCH_ACTIVE', True) %}btn-off{% else %}btn-on{% endif %}" style="grid-column: span 2;">
-                    {% if conf.get('TOUCH_ACTIVE', True) %}Touch-Funktion aus{% else %}Touch-Funktion an{% endif %}
+                <a href="/toggle_touch" class="btn {% if conf.get('TOUCH_ACTIVE', True) %}btn-off{% else %}btn-on{% endif %}">
+                    {% if conf.get('TOUCH_ACTIVE', True) %}Touch aus{% else %}Touch an{% endif %}
                 </a>
             </div>
+            
             <form action="/save" method="POST">
                 <div class="form-group">
                     <label>Anzeigeraum</label>
@@ -411,6 +438,13 @@ HTML_TEMPLATE = """
                             <strong style="color: #0f172a; font-size: 14px;">{{ lesson.stunde }}</strong>
                             <span style="color: #64748b; font-size: 12px; font-weight: bold;">{{ lesson.zeit }}</span>
                         </div>
+                        
+                        {% if lesson.status_code == 'cancelled' %}
+                            <div style="background-color: #fee2e2; color: #dc2626; padding: 5px 10px; border-radius: 5px; display: inline-block; font-size: 12px; font-weight: bold; margin-bottom: 10px; text-transform: uppercase;">Fällt aus</div>
+                        {% elif lesson.status_code == 'irregular' %}
+                            <div style="background-color: #fef08a; color: #854d0e; padding: 5px 10px; border-radius: 5px; display: inline-block; font-size: 12px; font-weight: bold; margin-bottom: 10px; text-transform: uppercase;">Vertretung</div>
+                        {% endif %}
+
                         <div style="font-size: 18px; font-weight: 800; color: #1e293b; margin-bottom: 4px;">
                             {{ lesson.fach }} <span style="color: #cbd5e1; margin: 0 4px;">|</span> {{ lesson.klasse }}
                         </div>
@@ -449,6 +483,14 @@ def save():
 @app.route('/update')
 def trigger_update():
     global force_update_flag
+    force_update_flag = True
+    return redirect('/')
+
+# NEU: Die Demo-Route
+@app.route('/demo')
+def trigger_demo():
+    global force_update_flag, show_demo_once
+    show_demo_once = True
     force_update_flag = True
     return redirect('/')
 
