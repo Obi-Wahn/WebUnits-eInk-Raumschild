@@ -258,6 +258,9 @@ def background_loop():
     last_touch_time = time.time()
     last_minute_triggered = None
     
+    # NEU: Speichert das Datum des letzten Feiertags/Wochenendes
+    last_static_date = None
+    
     update_times = [
         "07:55", "08:00", 
         "08:45", "08:50", 
@@ -297,11 +300,29 @@ def background_loop():
             elif force_update_flag:
                 print(f"[{current_hm}] MANUELLES Update!")
             
+            # Zustand speichern, bevor das Flag zurückgesetzt wird
+            is_manual = force_update_flag 
             force_update_flag = False
             
             if conf.get('DISPLAY_ACTIVE', True):
                 data, err = get_current_lesson(conf)
-                update_display_logic(data, err, conf)
+                
+                # --- NEU: Ruhemodus an Wochenenden und Feiertagen ---
+                current_date = datetime.date.today().strftime("%Y-%m-%d")
+                is_static_day = err in ["Schönes Wochenende!", "Unterrichtsfrei"]
+                
+                skip_update = False
+                if is_static_day and not is_manual:
+                    if last_static_date == current_date:
+                        print(f"[{current_hm}] Ruhemodus aktiv ({err}). Display-Update uebersprungen.")
+                        skip_update = True
+                    else:
+                        last_static_date = current_date # Einmaliges Update pro Tag zulassen
+                else:
+                    last_static_date = None # Reset an normalen Schultagen
+                    
+                if not skip_update:
+                    update_display_logic(data, err, conf)
             else:
                 clear_display_once()
                 
