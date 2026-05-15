@@ -38,10 +38,14 @@ app = Flask(__name__)
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'config.json')
 
 # Globale Flags & Variablen
-force_update_flag = False
+force_update_flag = True     # NEU: Startet auf True, damit sofort beim Booten geladen wird
 show_demo_once = False
 shutdown_event = threading.Event()   
 display_lock = threading.Lock()      
+
+# NEU: Globaler Cache für das Web-Interface
+current_display_data = None
+current_display_msg = "Warte auf erstes Update..."
 
 # Hardware-Konfiguration (Touch)
 TOUCH_RST_PIN = 22
@@ -94,7 +98,6 @@ def clear_touch_interrupt_via_i2c():
 # ==========================================
 
 def parse_lesson(lesson, conf):
-    """Hilfsfunktion zum Extrahieren der Stunde in ein Dictionary."""
     if not lesson: return None
     schedule = conf.get("SCHEDULE", {})
     lessons_conf = schedule.get("LESSONS", [])
@@ -102,13 +105,12 @@ def parse_lesson(lesson, conf):
     start_str = lesson.start.strftime("%H:%M")
     stunde_name = ""
     
-    # Pruefen, ob die Config das neue Listenformat nutzt
     if isinstance(lessons_conf, list):
         for l in lessons_conf:
             if l.get("start") == start_str:
                 stunde_name = l.get("name", "")
                 break
-    elif isinstance(lessons_conf, dict): # Fallback fuer alte Configs
+    elif isinstance(lessons_conf, dict):
         stunde_name = lessons_conf.get(start_str, "")
 
     return {
@@ -177,7 +179,6 @@ def get_current_lesson(conf):
                     message = "Unterrichtsende"
                 else:
                     message = "Raum ist frei"
-                    # Pruefen ob wir uns in einer definierten Pause befinden
                     for b in breaks:
                         bs_h, bs_m = map(int, b.get("start", "00:00").split(":"))
                         be_h, be_m = map(int, b.get("end", "00:00").split(":"))
@@ -220,7 +221,8 @@ def draw_lesson_block(draw, lesson_data, y_offset, label_text, f_small, f_reg, f
     elif status == 'irregular':
         draw.rectangle((5, y_content, 90, y_content + 18), fill=0)
         draw.text((8, y_content+2), "VERTRETUNG", font=f_small, fill=255)
-        main_info = f"{lesson_data['fach']} | {lesson_data['lehrer']}"
+        # HIER IST DIE KORREKTUR: Die Klasse wurde eingefuegt
+        main_info = f"{lesson_data['fach']} | {lesson_data['klasse']} ({lesson_data['lehrer']})"
         draw.text((95, y_content), main_info, font=f_reg, fill=0)
     else:
         main_info = f"{lesson_data['fach']} | {lesson_data['klasse']} ({lesson_data['lehrer']})"
@@ -251,7 +253,8 @@ def update_display_logic(data, message, conf):
             time_str = now.strftime("%d.%m.%Y %H:%M")
             draw.text((120, 5), time_str, font=f_small, fill=255)
 
-            if data and isinstance(data, dict):
+            # NEU: Prüfe, ob es überhaupt Unterricht zum Anzeigen gibt
+            if data and isinstance(data, dict) and (data.get('current') or data.get('next')):
                 curr_lesson = data.get('current')
                 next_lesson = data.get('next')
                 
@@ -269,6 +272,7 @@ def update_display_logic(data, message, conf):
                     draw.text((5, 74), "DANACH:", font=f_small, fill=0)
                     draw.text((5, 90), msg_text, font=f_reg, fill=0)
             else:
+                # NEU: Einzelne, aufgeräumte Meldung ohne Split-Screen
                 draw.text((5, 45), message, font=f_large, fill=0)
 
             epd.display(epd.getbuffer(image))
@@ -291,7 +295,7 @@ def clear_display_once():
 # ==========================================
 
 def background_loop():
-    global force_update_flag, show_demo_once
+    global force_update_flag, show_demo_once, current_display_data, current_display_msg
     last_update = 0
     last_touch_time = time.time()
     last_minute_triggered = None
@@ -303,12 +307,10 @@ def background_loop():
             shutdown_event.wait(5)
             continue
 
-        # Dynamische Update-Zeiten aus der Konfiguration berechnen
         schedule = conf.get("SCHEDULE", {})
         lessons_conf = schedule.get("LESSONS", [])
         dyn_update_times = set()
         
-        # Zeite aus Config-Array generieren (Start, Ende und Start-5Min)
         if isinstance(lessons_conf, list):
             for l in lessons_conf:
                 start_t = l.get("start")
@@ -351,15 +353,20 @@ def background_loop():
             if conf.get('DISPLAY_ACTIVE', True):
                 if show_demo_once:
                     data = {
-                        "current": {"fach": "Informatik", "lehrer": "Ab", "klasse": "11A", "zeit": "09:55 - 10:45", "stunde": "3. Std.", "status_code": "irregular"},
-                        "next": {"fach": "Geschichte", "lehrer": "Cd", "klasse": "9B", "zeit": "10:45 - 11:35", "stunde": "4. Std.", "status_code": None}
+                        # HIER WURDE DIE KLASSE AUF 11B GEÄNDERT
+                        "current": {"fach": "Informatik", "lehrer": "Ab", "klasse": "11B", "zeit": "09:55 - 10:40", "stunde": "3. Std.", "status_code": "irregular"},
+                        "next": {"fach": "Geschichte", "lehrer": "Cd", "klasse": "9B", "zeit": "10:45 - 11:30", "stunde": "4. Std.", "status_code": None}
                     }
                     err = ""
                     show_demo_once = False
-                    print(f"[{current_hm}] DEMO-DATEN werden einmalig angezeigt.")
+                    print(f"[{current_hm}] DEMO-DATEN generiert!")
                 else:
                     data, err = get_current_lesson(conf)
                 
+                # NEU: Daten im globalen Speicher ablegen (für das Web-Interface)
+                current_display_data = data
+                current_display_msg = err
+
                 current_date = datetime.date.today().strftime("%Y-%m-%d")
                 is_static_day = err in ["Schönes Wochenende!", "Unterrichtsfrei"]
                 
@@ -454,9 +461,10 @@ HTML_TEMPLATE = """
             </form>
             
             <div class="timetable-section">
-                <label>Aktuelle Belegung ({{ conf.get('ROOM_NAME', '') }})</label>
+                <label>Aktuelle Anzeige ({{ conf.get('ROOM_NAME', '') }})</label>
                 
-                {% if data and data is mapping %}
+                <!-- NEU: Auch in der Weboberfläche die Zweiteilung ausblenden, wenn kein Unterricht ist -->
+                {% if data and data is mapping and (data.current or data.next) %}
                     <h4 style="margin: 15px 0 5px 0; font-size: 12px; color: #64748b;">JETZT</h4>
                     {% if data.current %}
                         <div class="lesson-block">
@@ -494,7 +502,8 @@ HTML_TEMPLATE = """
                     {% endif %}
                     
                 {% else %}
-                    <div class="empty-state">{{ msg }}</div>
+                    <!-- NEU: Größere und mittige Schrift für die Feiertags/Wochenend-Meldung -->
+                    <div class="empty-state" style="font-size: 16px; padding: 30px 20px;">{{ msg }}</div>
                 {% endif %}
             </div>
             <p class="footer">Status: {{ now }}</p>
@@ -507,10 +516,14 @@ HTML_TEMPLATE = """
 @app.route('/')
 def index():
     conf = load_config()
-    current_data, message = None, ""
-    if conf:
-        current_data, message = get_current_lesson(conf)
-    return render_template_string(HTML_TEMPLATE, conf=conf, data=current_data, msg=message, now=datetime.datetime.now().strftime("%H:%M:%S"))
+    # NEU: Das Webinterface liest jetzt einfach den Cache aus, statt selbst WebUntis zu blockieren
+    return render_template_string(
+        HTML_TEMPLATE, 
+        conf=conf, 
+        data=current_display_data, 
+        msg=current_display_msg, 
+        now=datetime.datetime.now().strftime("%H:%M:%S")
+    )
 
 @app.route('/save', methods=['POST'])
 def save():
@@ -521,12 +534,14 @@ def save():
         save_config(conf)
         global force_update_flag
         force_update_flag = True
+        time.sleep(0.5) # Dem Hintergrundprozess kurz Zeit geben
     return redirect('/')
 
 @app.route('/update')
 def trigger_update():
     global force_update_flag
     force_update_flag = True
+    time.sleep(0.5) # Dem Hintergrundprozess kurz Zeit geben
     return redirect('/')
 
 @app.route('/demo')
@@ -534,6 +549,7 @@ def trigger_demo():
     global force_update_flag, show_demo_once
     show_demo_once = True
     force_update_flag = True
+    time.sleep(0.5) # Dem Hintergrundprozess kurz Zeit geben, um den Cache zu füllen!
     return redirect('/')
 
 @app.route('/toggle')
@@ -544,6 +560,7 @@ def toggle_display():
         save_config(conf)
         global force_update_flag
         force_update_flag = True
+        time.sleep(0.5)
     return redirect('/')
 
 @app.route('/toggle_touch')
@@ -554,6 +571,7 @@ def toggle_touch():
         save_config(conf)
         global force_update_flag
         force_update_flag = True
+        time.sleep(0.5)
     return redirect('/')
 
 if __name__ == '__main__':
