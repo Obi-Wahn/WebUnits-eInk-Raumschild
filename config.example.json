@@ -6,5 +6,24 @@
     "ROOM_NAME": "Raum101",
     "AUTO_UPDATE_SECONDS": 900,
     "DISPLAY_ACTIVE": true,
-    "TOUCH_ACTIVE": true
+    "TOUCH_ACTIVE": true,
+    "SCHEDULE": {
+        "DAY_START": "07:55",
+        "DAY_END": "15:30",
+        "LESSONS": [
+            {"start": "08:00", "end": "08:45", "name": "1. Std."},
+            {"start": "08:50", "end": "09:35", "name": "2. Std."},
+            {"start": "09:55", "end": "10:40", "name": "3. Std."},
+            {"start": "10:45", "end": "11:30", "name": "4. Std."},
+            {"start": "11:40", "end": "12:25", "name": "5. Std."},
+            {"start": "12:35", "end": "13:20", "name": "6. Std."},
+            {"start": "13:50", "end": "14:35", "name": "7. Std."},
+            {"start": "14:40", "end": "15:25", "name": "8. Std."}
+        ],
+        "BREAKS": [
+            {"start": "09:35", "end": "09:50", "name": "1. Pause"},
+            {"start": "11:30", "end": "11:40", "name": "2. Pause"},
+            {"start": "13:20", "end": "13:50", "name": "Mittagspause"}
+        ]
+    }
 }

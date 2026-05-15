@@ -39,7 +39,7 @@ CONFIG_FILE = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'config.
 
 # Globale Flags & Variablen
 force_update_flag = False
-show_demo_once = False       # NEU: Flag fuer den einmaligen Demo-Modus
+show_demo_once = False
 shutdown_event = threading.Event()   
 display_lock = threading.Lock()      
 
@@ -52,14 +52,11 @@ TOUCH_I2C_ADDR = 0x14 # GT1151 Chip Adresse
 # ==========================================
 
 def load_config():
-    if not os.path.exists(CONFIG_FILE):
-        return {}
+    if not os.path.exists(CONFIG_FILE): return {}
     try:
         with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
             content = f.read().strip()
-            if not content:
-                return {}
-            return json.loads(content)
+            return json.loads(content) if content else {}
     except Exception as e:
         print(f"FEHLER beim Laden der config.json: {e}")
         return {}
@@ -76,33 +73,52 @@ def save_config(config):
 # ==========================================
 
 def check_touch_via_i2c():
-    """Liest direkt das Speicher-Register des Touch-Chips aus (Polling)."""
     if not i2c_bus: return False
     try:
         write_msg = smbus.i2c_msg.write(TOUCH_I2C_ADDR, [0x81, 0x4E])
         read_msg = smbus.i2c_msg.read(TOUCH_I2C_ADDR, 1)
         i2c_bus.i2c_rdwr(write_msg, read_msg)
-        
-        status = list(read_msg)[0]
-        
-        if status & 0x80:
+        if list(read_msg)[0] & 0x80:
             i2c_bus.write_i2c_block_data(TOUCH_I2C_ADDR, 0x81, [0x4E, 0x00])
             return True
-    except:
-        pass
+    except: pass
     return False
 
 def clear_touch_interrupt_via_i2c():
-    """Löscht den Touch-Speicher."""
     if not i2c_bus: return
-    try:
-        i2c_bus.write_i2c_block_data(TOUCH_I2C_ADDR, 0x81, [0x4E, 0x00])
-    except:
-        pass
+    try: i2c_bus.write_i2c_block_data(TOUCH_I2C_ADDR, 0x81, [0x4E, 0x00])
+    except: pass
 
 # ==========================================
 # WEBUNTIS & DISPLAY LOGIK
 # ==========================================
+
+def parse_lesson(lesson, conf):
+    """Hilfsfunktion zum Extrahieren der Stunde in ein Dictionary."""
+    if not lesson: return None
+    schedule = conf.get("SCHEDULE", {})
+    lessons_conf = schedule.get("LESSONS", [])
+    
+    start_str = lesson.start.strftime("%H:%M")
+    stunde_name = ""
+    
+    # Pruefen, ob die Config das neue Listenformat nutzt
+    if isinstance(lessons_conf, list):
+        for l in lessons_conf:
+            if l.get("start") == start_str:
+                stunde_name = l.get("name", "")
+                break
+    elif isinstance(lessons_conf, dict): # Fallback fuer alte Configs
+        stunde_name = lessons_conf.get(start_str, "")
+
+    return {
+        "fach": ", ".join([s.name for s in lesson.subjects]),
+        "lehrer": ", ".join([t.name for t in lesson.teachers]),
+        "klasse": ", ".join([k.name for k in lesson.klassen]),
+        "zeit": f"{start_str} - {lesson.end.strftime('%H:%M')}",
+        "stunde": stunde_name,
+        "status_code": getattr(lesson, 'code', None)
+    }
 
 def get_current_lesson(conf):
     if not conf or not conf.get('UNTIS_PASS'):
@@ -123,58 +139,59 @@ def get_current_lesson(conf):
             return None, f"Raum {conf.get('ROOM_NAME', 'Unbekannt')} fehlt."
         
         today = datetime.date.today()
-        timetable = session.timetable(room=rooms[0], start=today, end=today)
         now = datetime.datetime.now()
         now_time = now.time()
         
-        # Wochenende und Feiertage / leere Tage abfangen
         if now.weekday() >= 5: 
-            return None, "Schönes Wochenende!"
+            return {"current": None, "next": None}, "Schönes Wochenende!"
             
+        timetable = session.timetable(room=rooms[0], start=today, end=today)
         if not timetable:
-            return None, "Unterrichtsfrei"
-        
-        current_lesson = None
-        for lesson in timetable:
-            # 5 Minuten Vorlaufzeit (Puffer)
-            lesson_start_buffered = lesson.start - datetime.timedelta(minutes=5)
+            return {"current": None, "next": None}, "Unterrichtsfrei"
             
+        timetable = sorted(timetable, key=lambda l: l.start)
+        current_lesson = None
+        next_lesson = None
+        
+        for lesson in timetable:
+            lesson_start_buffered = lesson.start - datetime.timedelta(minutes=5)
             if lesson_start_buffered <= now <= lesson.end:
                 current_lesson = lesson
-                break
+            elif lesson.start > now and next_lesson is None:
+                next_lesson = lesson
 
-        if current_lesson:
-            raster = {
-                "08:00": "1.", "08:50": "2.", "09:55": "3.", "10:45": "4.",
-                "11:45": "5.", "12:35": "6.", "13:55": "7.", "14:45": "8."
-            }
-            start_str = current_lesson.start.strftime("%H:%M")
-            stunde = raster.get(start_str, "")
-            
-            status_code = getattr(current_lesson, 'code', None)
-            
-            result_data = {
-                "fach": ", ".join([s.name for s in current_lesson.subjects]),
-                "lehrer": ", ".join([t.name for t in current_lesson.teachers]),
-                "klasse": ", ".join([k.name for k in current_lesson.klassen]),
-                "zeit": f"{start_str} - {current_lesson.end.strftime('%H:%M')}",
-                "stunde": f"{stunde} Stunde" if stunde else "",
-                "status_code": status_code
-            }
-            return result_data, None
-            
-        if datetime.time(9, 35) <= now_time < datetime.time(9, 50):
-            return None, "1. Pause"
-        elif datetime.time(11, 30) <= now_time < datetime.time(11, 40):
-            return None, "2. Pause"
-        elif datetime.time(13, 20) <= now_time < datetime.time(13, 50):
-            return None, "Mittagspause"
-        elif now_time < datetime.time(7, 55):
-            return None, "Guten Morgen!"
-        elif now_time >= datetime.time(15, 30):
-            return None, "Unterrichtsende"
-            
-        return None, "Raum ist frei"
+        message = ""
+        if current_lesson is None:
+            schedule = conf.get("SCHEDULE", {})
+            day_start = schedule.get("DAY_START", "07:55")
+            day_end = schedule.get("DAY_END", "15:30")
+            breaks = schedule.get("BREAKS", [])
+
+            try:
+                ds_h, ds_m = map(int, day_start.split(":"))
+                de_h, de_m = map(int, day_end.split(":"))
+                
+                if now_time < datetime.time(ds_h, ds_m):
+                    message = "Guten Morgen!"
+                elif now_time >= datetime.time(de_h, de_m):
+                    message = "Unterrichtsende"
+                else:
+                    message = "Raum ist frei"
+                    # Pruefen ob wir uns in einer definierten Pause befinden
+                    for b in breaks:
+                        bs_h, bs_m = map(int, b.get("start", "00:00").split(":"))
+                        be_h, be_m = map(int, b.get("end", "00:00").split(":"))
+                        if datetime.time(bs_h, bs_m) <= now_time < datetime.time(be_h, be_m):
+                            message = b.get("name", "Pause")
+                            break
+            except Exception as e:
+                print(f"Zeit-Parsing Fehler: {e}")
+                message = "Raum ist frei"
+
+        return {
+            "current": parse_lesson(current_lesson, conf),
+            "next": parse_lesson(next_lesson, conf)
+        }, message
         
     except Exception as e:
         error_msg = str(e)
@@ -186,12 +203,30 @@ def get_current_lesson(conf):
             return None, "Fehler: WebUntis nicht erreichbar"
     finally:
         if session:
-            try:
-                session.logout()
-            except:
-                pass
+            try: session.logout()
+            except: pass
 
-def update_display_logic(lesson_data, message, conf):
+def draw_lesson_block(draw, lesson_data, y_offset, label_text, f_small, f_reg, f_med):
+    header_text = f"{label_text} {lesson_data['stunde']} ({lesson_data['zeit']})"
+    draw.text((5, y_offset), header_text, font=f_small, fill=0)
+    
+    status = lesson_data.get('status_code')
+    y_content = y_offset + 16
+    
+    if status == 'cancelled':
+        draw.rectangle((5, y_content, 85, y_content + 18), fill=0)
+        draw.text((8, y_content+2), "FÄLLT AUS", font=f_small, fill=255)
+        draw.text((90, y_content), f"{lesson_data['klasse']}", font=f_reg, fill=0)
+    elif status == 'irregular':
+        draw.rectangle((5, y_content, 90, y_content + 18), fill=0)
+        draw.text((8, y_content+2), "VERTRETUNG", font=f_small, fill=255)
+        main_info = f"{lesson_data['fach']} | {lesson_data['lehrer']}"
+        draw.text((95, y_content), main_info, font=f_reg, fill=0)
+    else:
+        main_info = f"{lesson_data['fach']} | {lesson_data['klasse']} ({lesson_data['lehrer']})"
+        draw.text((5, y_content), main_info, font=f_reg, fill=0)
+
+def update_display_logic(data, message, conf):
     if shutdown_event.is_set(): return 
     with display_lock: 
         try: 
@@ -201,52 +236,40 @@ def update_display_logic(lesson_data, message, conf):
             draw = ImageDraw.Draw(image) 
             
             try: 
-                f_huge = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 32)
-                f_large = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 20) 
-                f_med = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 16)
-                f_reg = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 14)
-                f_small = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 12)
+                f_huge = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 24)
+                f_large = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 18) 
+                f_med = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 14)
+                f_reg = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 12)
+                f_small = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 11)
             except:
                 f_huge = f_large = f_med = f_reg = f_small = ImageFont.load_default()
 
             now = datetime.datetime.now()
             
-            # --- 1. KOPFZEILE ---
-            draw.rectangle((0, 0, 250, 28), fill=0)
-            draw.text((5, 4), conf.get('ROOM_NAME', 'Unbekannt'), font=f_large, fill=255)
-            
+            draw.rectangle((0, 0, 250, 24), fill=0)
+            draw.text((5, 3), conf.get('ROOM_NAME', 'Unbekannt'), font=f_med, fill=255)
             time_str = now.strftime("%d.%m.%Y %H:%M")
-            draw.text((110, 6), time_str, font=f_reg, fill=255)
+            draw.text((120, 5), time_str, font=f_small, fill=255)
 
-            if lesson_data:
-                # --- 2. HAUPTBEREICH (2x2 Grid) ---
-                draw.text((5, 40), lesson_data['stunde'], font=f_med, fill=0)
-                draw.text((120, 40), lesson_data['zeit'], font=f_med, fill=0)
+            if data and isinstance(data, dict):
+                curr_lesson = data.get('current')
+                next_lesson = data.get('next')
                 
-                status = lesson_data.get('status_code')
-                
-                if status == 'cancelled':
-                    draw.rectangle((5, 70, 110, 95), fill=0)
-                    draw.text((10, 74), "FÄLLT AUS", font=f_med, fill=255)
-                    draw.text((120, 75), lesson_data['klasse'], font=f_large, fill=0)
-                elif status == 'irregular':
-                    main_info = f"{lesson_data['fach']} | {lesson_data['klasse']}"
-                    draw.text((5, 75), main_info, font=f_large, fill=0)
-                    draw.rectangle((120, 62, 195, 75), fill=0)
-                    draw.text((123, 62), "Vertretung", font=f_small, fill=255)
-                    draw.text((120, 78), lesson_data['lehrer'], font=f_large, fill=0)
+                if curr_lesson:
+                    draw_lesson_block(draw, curr_lesson, 30, "JETZT:", f_small, f_reg, f_med)
                 else:
-                    main_info = f"{lesson_data['fach']} | {lesson_data['klasse']}"
-                    draw.text((5, 75), main_info, font=f_large, fill=0)
-                    draw.text((120, 75), lesson_data['lehrer'], font=f_large, fill=0)
+                    draw.text((5, 35), message, font=f_large, fill=0)
+                
+                draw.line((5, 68, 245, 68), fill=0, width=1)
+                
+                if next_lesson:
+                    draw_lesson_block(draw, next_lesson, 74, "DANACH:", f_small, f_reg, f_med)
+                else:
+                    msg_text = "Kein Unterricht mehr heute." if "Unterrichtsende" not in message else "Bis morgen!"
+                    draw.text((5, 74), "DANACH:", font=f_small, fill=0)
+                    draw.text((5, 90), msg_text, font=f_reg, fill=0)
             else:
-                wochentage = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
-                draw.text((5, 40), wochentage[now.weekday()], font=f_med, fill=0)
-                
-                if "Fehler" in message:
-                    draw.text((5, 70), message, font=f_reg, fill=0)
-                else:
-                    draw.text((5, 70), message, font=f_huge, fill=0)
+                draw.text((5, 45), message, font=f_large, fill=0)
 
             epd.display(epd.getbuffer(image))
             epd.sleep()
@@ -273,18 +296,6 @@ def background_loop():
     last_touch_time = time.time()
     last_minute_triggered = None
     last_static_date = None
-    
-    update_times = [
-        "07:55", "08:00", 
-        "08:45", "08:50", 
-        "09:35", "09:50", "09:55", 
-        "10:40", "10:45", 
-        "11:30", "11:40", "11:45", 
-        "12:30", "12:35", 
-        "13:20", "13:50", "13:55", 
-        "14:40", "14:45", 
-        "15:30"
-    ]
 
     while not shutdown_event.is_set():
         conf = load_config()
@@ -292,59 +303,71 @@ def background_loop():
             shutdown_event.wait(5)
             continue
 
+        # Dynamische Update-Zeiten aus der Konfiguration berechnen
+        schedule = conf.get("SCHEDULE", {})
+        lessons_conf = schedule.get("LESSONS", [])
+        dyn_update_times = set()
+        
+        # Zeite aus Config-Array generieren (Start, Ende und Start-5Min)
+        if isinstance(lessons_conf, list):
+            for l in lessons_conf:
+                start_t = l.get("start")
+                end_t = l.get("end")
+                if start_t: dyn_update_times.add(start_t)
+                if end_t: dyn_update_times.add(end_t)
+                try:
+                    h, m = map(int, start_t.split(":"))
+                    dt = datetime.datetime(2000, 1, 1, h, m) - datetime.timedelta(minutes=5)
+                    dyn_update_times.add(dt.strftime("%H:%M"))
+                except: pass
+        
+        for b in schedule.get("BREAKS", []):
+            if b.get("start"): dyn_update_times.add(b.get("start"))
+            if b.get("end"): dyn_update_times.add(b.get("end"))
+            
+        dyn_update_times.add(schedule.get("DAY_START", "07:55"))
+        dyn_update_times.add(schedule.get("DAY_END", "15:30"))
+        
+        update_times = list(dyn_update_times)
+
         now_time = time.time()
         current_hm = datetime.datetime.now().strftime("%H:%M")
         
         is_exact_time = (current_hm in update_times) and (last_minute_triggered != current_hm)
         is_interval_reached = (now_time - last_update >= conf.get('AUTO_UPDATE_SECONDS', 900))
 
-        # --- I2C POLLING ---
         if conf.get('TOUCH_ACTIVE', True) and check_touch_via_i2c():
             if now_time - last_touch_time > 5.0:
-                print(f"\n[TOUCH {datetime.datetime.now().strftime('%H:%M:%S')}] Display berührt! Update wird vorbereitet...")
+                print(f"\n[TOUCH {datetime.datetime.now().strftime('%H:%M:%S')}] Display beruehrt! Update wird vorbereitet...")
                 force_update_flag = True
             last_touch_time = now_time
 
-        # --- UPDATE-LOGIK ---
         if force_update_flag or is_interval_reached or is_exact_time:
-            if is_exact_time:
-                last_minute_triggered = current_hm 
-                print(f"[{current_hm}] Stundenwechsel/Pause erkannt!")
-            elif force_update_flag:
-                print(f"[{current_hm}] MANUELLES Update!")
+            if is_exact_time: last_minute_triggered = current_hm 
             
             is_manual = force_update_flag 
             force_update_flag = False
             
             if conf.get('DISPLAY_ACTIVE', True):
-                # DEMO-MODUS ABFANGEN
                 if show_demo_once:
                     data = {
-                        "fach": "Informatik",
-                        "lehrer": "Ab",
-                        "klasse": "11A",
-                        "zeit": "09:55 - 10:40",
-                        "stunde": "3. Stunde",
-                        "status_code": "irregular"
+                        "current": {"fach": "Informatik", "lehrer": "Ab", "klasse": "11A", "zeit": "09:55 - 10:45", "stunde": "3. Std.", "status_code": "irregular"},
+                        "next": {"fach": "Geschichte", "lehrer": "Cd", "klasse": "9B", "zeit": "10:45 - 11:35", "stunde": "4. Std.", "status_code": None}
                     }
-                    err = None
-                    show_demo_once = False # Direkt wieder abschalten fuer das naechste Mal
+                    err = ""
+                    show_demo_once = False
                     print(f"[{current_hm}] DEMO-DATEN werden einmalig angezeigt.")
                 else:
                     data, err = get_current_lesson(conf)
                 
-                # Ruhemodus an Wochenenden und Feiertagen
                 current_date = datetime.date.today().strftime("%Y-%m-%d")
                 is_static_day = err in ["Schönes Wochenende!", "Unterrichtsfrei"]
                 
                 skip_update = False
                 if is_static_day and not is_manual:
-                    if last_static_date == current_date:
-                        skip_update = True
-                    else:
-                        last_static_date = current_date 
-                else:
-                    last_static_date = None 
+                    if last_static_date == current_date: skip_update = True
+                    else: last_static_date = current_date 
+                else: last_static_date = None 
                     
                 if not skip_update:
                     update_display_logic(data, err, conf)
@@ -377,10 +400,10 @@ HTML_TEMPLATE = """
         .header p { margin: 5px 0 0; opacity: 0.6; font-size: 12px; font-weight: bold; }
         .content { padding: 30px; }
         .btn-group { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 25px; }
-        .btn { display: block; text-decoration: none; text-align: center; padding: 15px; border-radius: 12px; font-weight: bold; color: white; transition: transform 0.1s; border: none; cursor: pointer; }
+        .btn { display: block; text-decoration: none; text-align: center; padding: 15px; border-radius: 12px; font-weight: bold; color: white; transition: transform 0.1s; border: none; cursor: pointer; font-size: 14px;}
         .btn:active { transform: scale(0.98); }
         .btn-update { background-color: #007BFF; } 
-        .btn-demo { background-color: #6f42c1; } /* LILA FUER DEMO */
+        .btn-demo { background-color: #6f42c1; } 
         .btn-off { background-color: #DC3545; }    
         .btn-on { background-color: #28A745; }     
         .btn-save { background-color: #0f172a; width: 100%; font-size: 16px; margin-top: 10px; color: white; padding: 15px; border-radius: 12px; font-weight: bold; }
@@ -388,9 +411,12 @@ HTML_TEMPLATE = """
         label { display: block; font-size: 10px; font-weight: 800; color: #94a3b8; text-transform: uppercase; margin-bottom: 5px; }
         input { width: 100%; box-sizing: border-box; background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 12px; border-radius: 10px; font-size: 14px; font-weight: 600; outline: none; }
         .timetable-section { margin-top: 35px; padding-top: 25px; border-top: 1px solid #e2e8f0; }
+        .lesson-block { background: #f8fafc; border-radius: 10px; padding: 15px; margin-top: 10px; border: 1px solid #e2e8f0; }
         .empty-state { text-align: center; color: #94a3b8; font-size: 13px; padding: 20px; background: #f8fafc; border-radius: 10px; margin-top: 10px; font-weight: bold; }
         .error-msg { background-color: #fee2e2; color: #dc2626; padding: 15px; border-radius: 10px; font-size: 13px; font-weight: bold; text-align: center; margin-bottom: 20px; }
         .footer { text-align: center; font-size: 10px; color: #cbd5e1; margin-top: 35px; text-transform: uppercase; letter-spacing: 1px; }
+        .tag-red { background-color: #fee2e2; color: #dc2626; padding: 4px 8px; border-radius: 5px; font-size: 11px; font-weight: bold; text-transform: uppercase; margin-bottom: 6px; display: inline-block;}
+        .tag-yellow { background-color: #fef08a; color: #854d0e; padding: 4px 8px; border-radius: 5px; font-size: 11px; font-weight: bold; text-transform: uppercase; margin-bottom: 6px; display: inline-block;}
     </style>
 </head>
 <body>
@@ -401,13 +427,9 @@ HTML_TEMPLATE = """
         </div>
         <div class="content">
             {% if conf|length == 0 %}
-                <div class="error-msg">
-                    <strong>Konfigurationsfehler!</strong><br>
-                    Die Datei 'config.json' konnte nicht gelesen werden.
-                </div>
+                <div class="error-msg">Konfigurationsfehler! Die Datei 'config.json' konnte nicht gelesen werden.</div>
             {% endif %}
             
-            <!-- NEU: Das 2x2 Grid fuer die Knoepfe -->
             <div class="btn-group">
                 <a href="/update" class="btn btn-update">Update</a>
                 <a href="/demo" class="btn btn-demo">Demo-Daten</a>
@@ -430,26 +452,47 @@ HTML_TEMPLATE = """
                 </div>
                 <button type="submit" class="btn btn-save">Speichern</button>
             </form>
+            
             <div class="timetable-section">
                 <label>Aktuelle Belegung ({{ conf.get('ROOM_NAME', '') }})</label>
-                {% if lesson %}
-                    <div style="background: #f8fafc; border-radius: 10px; padding: 15px; margin-top: 10px; border: 1px solid #e2e8f0;">
-                        <div style="display: flex; justify-content: space-between; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; margin-bottom: 8px;">
-                            <strong style="color: #0f172a; font-size: 14px;">{{ lesson.stunde }}</strong>
-                            <span style="color: #64748b; font-size: 12px; font-weight: bold;">{{ lesson.zeit }}</span>
+                
+                {% if data and data is mapping %}
+                    <h4 style="margin: 15px 0 5px 0; font-size: 12px; color: #64748b;">JETZT</h4>
+                    {% if data.current %}
+                        <div class="lesson-block">
+                            <div style="display: flex; justify-content: space-between; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; margin-bottom: 8px;">
+                                <strong style="color: #0f172a; font-size: 14px;">{{ data.current.stunde }}</strong>
+                                <span style="color: #64748b; font-size: 12px; font-weight: bold;">{{ data.current.zeit }}</span>
+                            </div>
+                            {% if data.current.status_code == 'cancelled' %}<div class="tag-red">Fällt aus</div>
+                            {% elif data.current.status_code == 'irregular' %}<div class="tag-yellow">Vertretung</div>{% endif %}
+                            <div style="font-size: 16px; font-weight: 800; color: #1e293b; margin-bottom: 4px;">
+                                {{ data.current.fach }} <span style="color: #cbd5e1; margin: 0 4px;">|</span> {{ data.current.klasse }}
+                            </div>
+                            <div style="font-size: 12px; color: #475569; font-weight: 600;">Lehrkraft: {{ data.current.lehrer }}</div>
                         </div>
-                        
-                        {% if lesson.status_code == 'cancelled' %}
-                            <div style="background-color: #fee2e2; color: #dc2626; padding: 5px 10px; border-radius: 5px; display: inline-block; font-size: 12px; font-weight: bold; margin-bottom: 10px; text-transform: uppercase;">Fällt aus</div>
-                        {% elif lesson.status_code == 'irregular' %}
-                            <div style="background-color: #fef08a; color: #854d0e; padding: 5px 10px; border-radius: 5px; display: inline-block; font-size: 12px; font-weight: bold; margin-bottom: 10px; text-transform: uppercase;">Vertretung</div>
-                        {% endif %}
+                    {% else %}
+                        <div class="empty-state">{{ msg }}</div>
+                    {% endif %}
 
-                        <div style="font-size: 18px; font-weight: 800; color: #1e293b; margin-bottom: 4px;">
-                            {{ lesson.fach }} <span style="color: #cbd5e1; margin: 0 4px;">|</span> {{ lesson.klasse }}
+                    <h4 style="margin: 20px 0 5px 0; font-size: 12px; color: #64748b;">DANACH</h4>
+                    {% if data.next %}
+                        <div class="lesson-block">
+                            <div style="display: flex; justify-content: space-between; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; margin-bottom: 8px;">
+                                <strong style="color: #0f172a; font-size: 14px;">{{ data.next.stunde }}</strong>
+                                <span style="color: #64748b; font-size: 12px; font-weight: bold;">{{ data.next.zeit }}</span>
+                            </div>
+                            {% if data.next.status_code == 'cancelled' %}<div class="tag-red">Fällt aus</div>
+                            {% elif data.next.status_code == 'irregular' %}<div class="tag-yellow">Vertretung</div>{% endif %}
+                            <div style="font-size: 16px; font-weight: 800; color: #1e293b; margin-bottom: 4px;">
+                                {{ data.next.fach }} <span style="color: #cbd5e1; margin: 0 4px;">|</span> {{ data.next.klasse }}
+                            </div>
+                            <div style="font-size: 12px; color: #475569; font-weight: 600;">Lehrkraft: {{ data.next.lehrer }}</div>
                         </div>
-                        <div style="font-size: 13px; color: #475569; font-weight: 600;">Lehrkraft: {{ lesson.lehrer }}</div>
-                    </div>
+                    {% else %}
+                        <div class="empty-state">Kein Unterricht mehr.</div>
+                    {% endif %}
+                    
                 {% else %}
                     <div class="empty-state">{{ msg }}</div>
                 {% endif %}
@@ -467,7 +510,7 @@ def index():
     current_data, message = None, ""
     if conf:
         current_data, message = get_current_lesson(conf)
-    return render_template_string(HTML_TEMPLATE, conf=conf, lesson=current_data, msg=message, now=datetime.datetime.now().strftime("%H:%M:%S"))
+    return render_template_string(HTML_TEMPLATE, conf=conf, data=current_data, msg=message, now=datetime.datetime.now().strftime("%H:%M:%S"))
 
 @app.route('/save', methods=['POST'])
 def save():
@@ -486,7 +529,6 @@ def trigger_update():
     force_update_flag = True
     return redirect('/')
 
-# NEU: Die Demo-Route
 @app.route('/demo')
 def trigger_demo():
     global force_update_flag, show_demo_once
