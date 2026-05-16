@@ -38,12 +38,12 @@ app = Flask(__name__)
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'config.json')
 
 # Globale Flags & Variablen
-force_update_flag = True     # NEU: Startet auf True, damit sofort beim Booten geladen wird
+force_update_flag = True     # Startet auf True, damit direkt beim Booten geladen wird
 show_demo_once = False
 shutdown_event = threading.Event()   
 display_lock = threading.Lock()      
 
-# NEU: Globaler Cache für das Web-Interface
+# Globaler Cache für das Web-Interface (Spiegelung des Displays)
 current_display_data = None
 current_display_msg = "Warte auf erstes Update..."
 
@@ -237,7 +237,7 @@ def update_display_logic(data, message, conf):
             draw = ImageDraw.Draw(image) 
             
             try: 
-                # MEGA-Schriftart auf Größe 16 reduziert für perfekten Sitz auf 250px Displays
+                # Schriftgröße 16 sorgt für die sichere Zentrierung mitsamt Ausrufezeichen innerhalb der 250 Pixel
                 f_mega = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 16)
                 f_huge = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 24)
                 f_large = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 18) 
@@ -249,22 +249,27 @@ def update_display_logic(data, message, conf):
 
             now = datetime.datetime.now()
             
+            # Kopfzeile (Invertierter Balken)
             draw.rectangle((0, 0, 250, 24), fill=0)
             draw.text((5, 3), conf.get('ROOM_NAME', 'Unbekannt'), font=f_med, fill=255)
             time_str = now.strftime("%d.%m.%Y %H:%M")
             draw.text((120, 5), time_str, font=f_small, fill=255)
 
+            # Prüfe, ob überhaupt aktiver Unterricht ansteht, andernfalls Zweiteilung ausblenden
             if data and isinstance(data, dict) and (data.get('current') or data.get('next')):
                 curr_lesson = data.get('current')
                 next_lesson = data.get('next')
                 
+                # JETZT BEREICH
                 if curr_lesson:
                     draw_lesson_block(draw, curr_lesson, 30, "JETZT:", f_small, f_reg, f_med)
                 else:
                     draw.text((5, 35), message, font=f_large, fill=0)
                 
+                # Horizontale Trennlinie
                 draw.line((5, 68, 245, 68), fill=0, width=1)
                 
+                # DANACH BEREICH
                 if next_lesson:
                     draw_lesson_block(draw, next_lesson, 74, "DANACH:", f_small, f_reg, f_med)
                 else:
@@ -272,6 +277,7 @@ def update_display_logic(data, message, conf):
                     draw.text((5, 74), "DANACH:", font=f_small, fill=0)
                     draw.text((5, 90), msg_text, font=f_reg, fill=0)
             else:
+                # Aufgeräumte Einzelmeldung zentrieren (Wochenende, Feiertag, vor Schulbeginn)
                 try:
                     bbox = draw.textbbox((0, 0), message, font=f_mega)
                     text_w = bbox[2] - bbox[0]
@@ -279,7 +285,6 @@ def update_display_logic(data, message, conf):
                     text_w, _ = draw.textsize(message, font=f_mega)
                 
                 x_pos = (250 - text_w) / 2 if text_w < 250 else 2
-                
                 draw.text((x_pos, 60), message, font=f_mega, fill=0)
 
             epd.display(epd.getbuffer(image))
@@ -314,6 +319,7 @@ def background_loop():
             shutdown_event.wait(5)
             continue
 
+        # Dynamische Update-Zeiten aus der Konfiguration berechnen
         schedule = conf.get("SCHEDULE", {})
         lessons_conf = schedule.get("LESSONS", [])
         dyn_update_times = set()
@@ -369,6 +375,7 @@ def background_loop():
                 else:
                     data, err = get_current_lesson(conf)
                 
+                # Übergabe in den globalen Cache zur Bereitstellung für das Web-Interface
                 current_display_data = data
                 current_display_msg = err
 
@@ -551,7 +558,7 @@ def trigger_demo():
     global force_update_flag, show_demo_once
     show_demo_once = True
     force_update_flag = True
-    time.sleep(0.5)
+    time.sleep(0.5) # Synchronisationspuffer für das sofortige Laden des Cache
     return redirect('/')
 
 @app.route('/toggle')
@@ -600,8 +607,9 @@ if __name__ == '__main__':
             s.close()
         except: pass
             
-        print(f" * Admin-Interface: http://{local_ip}:5000")
-        serve(app, host='0.0.0.0', port=5000)
+        print(f" * Admin-Interface (Localhost): http://127.0.0.1:5000")
+        # Für den sicheren Nginx-Proxy-Betrieb an Localhost binden
+        serve(app, host='127.0.0.1', port=5000)
         
     except KeyboardInterrupt:
         shutdown_event.set()
