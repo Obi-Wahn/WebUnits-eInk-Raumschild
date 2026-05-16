@@ -6,13 +6,15 @@ Die vorliegende Anleitung dokumentiert die vollständige Einrichtung eines Raspb
 
 **Features:**
 
-* Automatische WebUntis-Synchronisation  
-* Smarte Anzeige von Freistunden, Pausenzeiten, Feiertagen und Doppelstunden  
-* Lokales Web-Interface zur Konfiguration (Raumauswahl, Intervall, Touch-Steuerung)  
+* Live-Synchronisation der "Jetzt" und "Danach" Unterrichtsstunden  
+* Automatische visuelle Markierung von Ausfällen und Vertretungen  
+* Konfigurierbarer, dynamischer Stundenplan  
+* Smarte Anzeige von Pausenzeiten und Feiertagen  
+* Lokales Web-Interface zur Konfiguration (inkl. Demo-Modus)  
 * Kapazitiver Touch-Support (via I2C-Polling für fehlerfreie Eingaben)  
 * Offline-Resilienz bei WLAN-Abbrüchen
 
-**Voraussetzungen:** \* Raspberry Pi Zero 2 W mit installiertem **Raspberry Pi OS Lite (Trixie)**.
+**Voraussetzungen:** \* Raspberry Pi Zero 2 W mit installiertem **Raspberry Pi OS Lite**.
 
 * Konfigurierte WLAN-Verbindung und aktivierter SSH-Zugriff.  
 * Standard-Benutzername: pi (Bei abweichendem Benutzernamen sind die Pfade entsprechend anzupassen).
@@ -33,13 +35,13 @@ Das E-Paper-Display benötigt die SPI-Schnittstelle, der kapazitive Touch-Chip d
 
 ## **Phase 2: System-Updates & Abhängigkeiten**
 
-Aktualisierung des Betriebssystems und Installation essenzieller System-Bibliotheken (für Bildverarbeitung und I2C-Kommunikation).
+Aktualisierung des Betriebssystems und Installation essenzieller System-Bibliotheken (für Bildverarbeitung, I2C-Kommunikation und Schriftarten für Umlaute).
 
 1. Paketquellen aktualisieren:  
    sudo apt update && sudo apt upgrade \-y
 
 2. Benötigte Systempakete installieren:  
-   sudo apt install \-y python3-pip python3-venv git libopenjp2-7 libtiff5 libxcb1 i2c-tools
+   sudo apt install \-y python3-pip python3-venv git libopenjp2-7 libtiff5 libxcb1 i2c-tools fonts-dejavu
 
 ## **Phase 3: Projektordner & Waveshare-Treiber**
 
@@ -64,7 +66,7 @@ Bereitstellung einer isolierten Umgebung für die Python-Pakete zur Vermeidung v
    source webuntis/bin/activate
 
    *(Indikator: Der Eingabeaufforderung wird ein (webuntis) vorangestellt).*  
-3. Erforderliche Python-Bibliotheken (inkl. smbus2 für das Touch-Polling) installieren:  
+3. Erforderliche Python-Bibliotheken installieren:  
    pip install RPi.GPIO spidev Pillow webuntis flask waitress smbus2
 
 4. Virtuelle Umgebung deaktivieren:  
@@ -78,9 +80,7 @@ Bereitstellung der Skripte im Projektverzeichnis /home/pi/webuntis-display. Folg
 2. **start.sh**: Das Start-Skript (muss mit chmod \+x start.sh ausführbar gemacht werden).  
 3. **config.json**: Die Konfigurationsdatei.
 
-*(Hinweis: Als Vorlage kann die beiliegende Datei config.example.json verwendet und nach config.json umbenannt werden, um die schulspezifischen Zugangsdaten einzutragen).*
-
-Beispiel für eine gültige config.json:
+Als Vorlage für die config.json dient folgender Codeblock. Hier müssen die schulspezifischen Zugangsdaten sowie die genauen Stunden- und Pausenzeiten eingetragen werden:
 
 {  
     "UNTIS\_SERVER": "demo.webuntis.com",  
@@ -90,7 +90,18 @@ Beispiel für eine gültige config.json:
     "ROOM\_NAME": "Raum101",  
     "AUTO\_UPDATE\_SECONDS": 900,  
     "DISPLAY\_ACTIVE": true,  
-    "TOUCH\_ACTIVE": true  
+    "TOUCH\_ACTIVE": true,  
+    "SCHEDULE": {  
+        "DAY\_START": "07:55",  
+        "DAY\_END": "15:30",  
+        "LESSONS": \[  
+            {"start": "08:00", "end": "08:45", "name": "1. Std."},  
+            {"start": "08:50", "end": "09:35", "name": "2. Std."}  
+        \],  
+        "BREAKS": \[  
+            {"start": "09:35", "end": "09:50", "name": "1. Pause"}  
+        \]  
+    }  
 }
 
 ## **Phase 6: Autostart-Service (systemd) einrichten**

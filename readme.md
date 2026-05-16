@@ -1,6 +1,6 @@
 # **WebUntis E-Paper Türschild (Raumanzeige)**
 
-Automatisches, wartungsfreies E-Paper-Türschild für Schulen. Synchronisiert sich selbstständig mit der WebUntis-API und zeigt den aktuellen Stundenplan, Pausenzeiten sowie Raumbelegungen an. Inklusive Touch-Support und Admin-Webinterface.
+Automatisches, wartungsfreies E-Paper-Türschild für Schulen. Synchronisiert sich selbstständig mit der WebUntis-API und zeigt den aktuellen Stundenplan, Vertretungen, Ausfälle sowie die Folge-Stunden ("Jetzt / Danach") an. Inklusive Touch-Support und blitzschnellem Admin-Webinterface.
 
 Dieses Projekt wurde speziell für den Schulalltag entwickelt und läuft ressourcenschonend auf einem Raspberry Pi Zero 2 W.
 
@@ -8,11 +8,13 @@ Dieses Projekt wurde speziell für den Schulalltag entwickelt und läuft ressour
 
 ## **✨ Funktionen**
 
-* **Live-Synchronisation:** Holt den aktuellen Tagesplan für den konfigurierten Raum über die WebUntis-API.  
-* **Smarte Zeiterkennung:** Erkennt automatisch Doppelstunden (5-Minuten-Vorlauf), Pausenzeiten, Wochenenden und unterrichtsfreie Tage (z. B. Feiertage/Ferien).  
-* **Offline-Resilienz:** Fängt WLAN-Verbindungsabbrüche sauber ab und versucht es nach einem festgelegten Intervall erneut, anstatt abzustürzen.  
-* **Kapazitiver Touch-Support:** Ein Tippen auf das Display erzwingt ein sofortiges Update. Ghost-Touches durch elektromagnetische Felder des E-Papers werden durch gezieltes I2C-Polling (Speicherleerung) zuverlässig unterdrückt.  
-* **Admin-Webinterface:** Eine lokal gehostete Webseite (im Schulnetzwerk erreichbar) ermöglicht das Ändern des angezeigten Raumes, das Anpassen der Update-Intervalle sowie das Deaktivieren von Display oder Touch-Funktion.
+* **Live-Synchronisation (Jetzt & Danach):** Holt den aktuellen Tagesplan für den konfigurierten Raum über die WebUntis-API. Das Display wird intelligent aufgeteilt und zeigt neben der laufenden Stunde auch direkt an, wer als Nächstes den Raum belegt.  
+* **Vertretungs- und Ausfallautomatik:** Fällt eine Stunde aus, wird dies mit einem markanten, invertierten Block ("FÄLLT AUS") signalisiert. Gleiches gilt für Vertretungsstunden.  
+* **Dynamischer Stundenplan:** Die genauen Unterrichts- und Pausenzeiten (inkl. 5-Minuten-Vorlauf) berechnet das Skript vollautomatisch anhand einer zentralen Konfigurationsdatei.  
+* **Smarte Zeiterkennung:** Erkennt Wochenenden und unterrichtsfreie Tage (z. B. Feiertage/Ferien) und schaltet das Display in einen schonenden Ruhemodus mit zentrierter Großschrift.  
+* **Offline-Resilienz:** Fängt WLAN-Verbindungsabbrüche sauber ab und versucht es nach einem festgelegten Intervall erneut.  
+* **Kapazitiver Touch-Support:** Ein Tippen auf das Display erzwingt ein sofortiges Update. Ghost-Touches durch das E-Paper werden durch gezieltes I2C-Polling zuverlässig unterdrückt.  
+* **Admin-Webinterface mit Caching:** Eine lokal im Schulnetzwerk erreichbare Webseite spiegelt das Display live wider. Sie lädt dank internem Zwischenspeicher (Cache) in Millisekunden und bietet einen "Demo-Modus" für Präsentationen.
 
 ## **🛠️ Hardware-Voraussetzungen**
 
@@ -27,26 +29,25 @@ Dieses Projekt baut auf mehreren Open-Source-Bibliotheken auf. Um das Skript aus
 ### **System-Pakete**
 
 * python3-venv, git, i2c-tools  
-* libopenjp2-7, libtiff5, libxcb1 (für die Bildverarbeitung)
+* libopenjp2-7, libtiff5, libxcb1 (für die Bildverarbeitung)  
+* fonts-dejavu (Wichtig für die Darstellung von Umlauten und dynamischen Schriftgrößen)
 
 ### **Python-Bibliotheken (via pip)**
 
-* [**python-webuntis**](https://github.com/python-webuntis/python-webuntis) (webuntis): Die essenzielle Schnittstelle, um sich in WebUntis einzuloggen und die Stundenpläne abzurufen.  
-* [**Pillow**](https://python-pillow.github.io/): Die Python Imaging Library. Wird genutzt, um die Layouts (Text, Linien) in den Arbeitsspeicher zu zeichnen, bevor sie an das Display gesendet werden.  
-* [**Flask**](https://flask.palletsprojects.com/) & [**Waitress**](https://docs.pylonsproject.org/projects/waitress/): Stellen den lokalen Webserver für das Admin-Dashboard im Netzwerk bereit.  
-* [**Waveshare e-Paper**](https://github.com/waveshareteam/e-Paper): Die offiziellen Hardware-Treiber zur Ansteuerung des Displays über die SPI-Schnittstelle.  
-* [**smbus2**](https://pypi.org/project/smbus2/): Ermöglicht die direkte I2C-Kommunikation mit dem GT1151 Touch-Controller, um Hardware-Interrupts kontrolliert zu löschen.  
-* **RPi.GPIO** & **spidev**: Für die generelle Pin- und Bus-Steuerung des Raspberry Pi.
+* [**python-webuntis**](https://github.com/python-webuntis/python-webuntis) (webuntis): Die essenzielle Schnittstelle, um sich in WebUntis einzuloggen.  
+* [**Pillow**](https://python-pillow.github.io/): Die Python Imaging Library zum Zeichnen der Layouts.  
+* [**Flask**](https://flask.palletsprojects.com/) & [**Waitress**](https://docs.pylonsproject.org/projects/waitress/): Stellen den lokalen Webserver bereit.  
+* [**Waveshare e-Paper**](https://github.com/waveshareteam/e-Paper): Die offiziellen Hardware-Treiber (SPI).  
+* [**smbus2**](https://pypi.org/project/smbus2/): Für die direkte I2C-Kommunikation mit dem Touch-Controller.  
+* **RPi.GPIO** & **spidev**: Für die Bus-Steuerung des Raspberry Pi.
 
 ## **🚀 Installation & Einrichtung**
 
-Eine vollständige, Schritt-für-Schritt-Installationsanleitung (vom flashen des Betriebssystems bis zur Einrichtung des Autostart-Dienstes) findest du in der separaten Datei [**anleitung.md**](http://docs.google.com/anleitung.md).
+Eine vollständige, Schritt-für-Schritt-Installationsanleitung findest du in der separaten Datei [**anleitung.md**](http://docs.google.com/anleitung.md).
 
 ## **⚙️ Konfiguration**
 
-Das Skript benötigt eine config.json im Hauptverzeichnis. Eine Vorlage liegt als config.example.json bei.
-
-Benenne diese einfach um und trage die Zugangsdaten deiner Schule ein:
+Das Skript benötigt eine config.json im Hauptverzeichnis. Eine Vorlage liegt als config.example.json bei. In dieser Datei kannst du auch die exakten Unterrichts- und Pausenzeiten deiner Schule definieren:
 
 {  
     "UNTIS\_SERVER": "demo.webuntis.com",  
@@ -56,7 +57,19 @@ Benenne diese einfach um und trage die Zugangsdaten deiner Schule ein:
     "ROOM\_NAME": "Raum101",  
     "AUTO\_UPDATE\_SECONDS": 900,  
     "DISPLAY\_ACTIVE": true,  
-    "TOUCH\_ACTIVE": true  
+    "TOUCH\_ACTIVE": true,  
+    "SCHEDULE": {  
+        "DAY\_START": "07:55",  
+        "DAY\_END": "15:30",  
+        "LESSONS": \[  
+            {"start": "08:00", "end": "08:45", "name": "1. Std."},  
+            {"start": "08:50", "end": "09:35", "name": "2. Std."},  
+            {"start": "09:55", "end": "10:40", "name": "3. Std."}  
+        \],  
+        "BREAKS": \[  
+            {"start": "09:35", "end": "09:50", "name": "1. Pause"}  
+        \]  
+    }  
 }
 
 ## **📝 Lizenz & Nutzung**
