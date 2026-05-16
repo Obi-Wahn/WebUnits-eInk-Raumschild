@@ -221,7 +221,6 @@ def draw_lesson_block(draw, lesson_data, y_offset, label_text, f_small, f_reg, f
     elif status == 'irregular':
         draw.rectangle((5, y_content, 90, y_content + 18), fill=0)
         draw.text((8, y_content+2), "VERTRETUNG", font=f_small, fill=255)
-        # HIER IST DIE KORREKTUR: Die Klasse wurde eingefuegt
         main_info = f"{lesson_data['fach']} | {lesson_data['klasse']} ({lesson_data['lehrer']})"
         draw.text((95, y_content), main_info, font=f_reg, fill=0)
     else:
@@ -238,13 +237,15 @@ def update_display_logic(data, message, conf):
             draw = ImageDraw.Draw(image) 
             
             try: 
+                # MEGA-Schriftart auf Größe 16 reduziert für perfekten Sitz auf 250px Displays
+                f_mega = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 16)
                 f_huge = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 24)
                 f_large = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 18) 
                 f_med = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 14)
                 f_reg = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 12)
                 f_small = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 11)
             except:
-                f_huge = f_large = f_med = f_reg = f_small = ImageFont.load_default()
+                f_mega = f_huge = f_large = f_med = f_reg = f_small = ImageFont.load_default()
 
             now = datetime.datetime.now()
             
@@ -253,7 +254,6 @@ def update_display_logic(data, message, conf):
             time_str = now.strftime("%d.%m.%Y %H:%M")
             draw.text((120, 5), time_str, font=f_small, fill=255)
 
-            # NEU: Prüfe, ob es überhaupt Unterricht zum Anzeigen gibt
             if data and isinstance(data, dict) and (data.get('current') or data.get('next')):
                 curr_lesson = data.get('current')
                 next_lesson = data.get('next')
@@ -272,8 +272,15 @@ def update_display_logic(data, message, conf):
                     draw.text((5, 74), "DANACH:", font=f_small, fill=0)
                     draw.text((5, 90), msg_text, font=f_reg, fill=0)
             else:
-                # NEU: Einzelne, aufgeräumte Meldung ohne Split-Screen
-                draw.text((5, 45), message, font=f_large, fill=0)
+                try:
+                    bbox = draw.textbbox((0, 0), message, font=f_mega)
+                    text_w = bbox[2] - bbox[0]
+                except AttributeError:
+                    text_w, _ = draw.textsize(message, font=f_mega)
+                
+                x_pos = (250 - text_w) / 2 if text_w < 250 else 2
+                
+                draw.text((x_pos, 60), message, font=f_mega, fill=0)
 
             epd.display(epd.getbuffer(image))
             epd.sleep()
@@ -353,7 +360,6 @@ def background_loop():
             if conf.get('DISPLAY_ACTIVE', True):
                 if show_demo_once:
                     data = {
-                        # HIER WURDE DIE KLASSE AUF 11B GEÄNDERT
                         "current": {"fach": "Informatik", "lehrer": "Ab", "klasse": "11B", "zeit": "09:55 - 10:40", "stunde": "3. Std.", "status_code": "irregular"},
                         "next": {"fach": "Geschichte", "lehrer": "Cd", "klasse": "9B", "zeit": "10:45 - 11:30", "stunde": "4. Std.", "status_code": None}
                     }
@@ -363,7 +369,6 @@ def background_loop():
                 else:
                     data, err = get_current_lesson(conf)
                 
-                # NEU: Daten im globalen Speicher ablegen (für das Web-Interface)
                 current_display_data = data
                 current_display_msg = err
 
@@ -463,7 +468,6 @@ HTML_TEMPLATE = """
             <div class="timetable-section">
                 <label>Aktuelle Anzeige ({{ conf.get('ROOM_NAME', '') }})</label>
                 
-                <!-- NEU: Auch in der Weboberfläche die Zweiteilung ausblenden, wenn kein Unterricht ist -->
                 {% if data and data is mapping and (data.current or data.next) %}
                     <h4 style="margin: 15px 0 5px 0; font-size: 12px; color: #64748b;">JETZT</h4>
                     {% if data.current %}
@@ -502,7 +506,6 @@ HTML_TEMPLATE = """
                     {% endif %}
                     
                 {% else %}
-                    <!-- NEU: Größere und mittige Schrift für die Feiertags/Wochenend-Meldung -->
                     <div class="empty-state" style="font-size: 16px; padding: 30px 20px;">{{ msg }}</div>
                 {% endif %}
             </div>
@@ -516,7 +519,6 @@ HTML_TEMPLATE = """
 @app.route('/')
 def index():
     conf = load_config()
-    # NEU: Das Webinterface liest jetzt einfach den Cache aus, statt selbst WebUntis zu blockieren
     return render_template_string(
         HTML_TEMPLATE, 
         conf=conf, 
@@ -534,14 +536,14 @@ def save():
         save_config(conf)
         global force_update_flag
         force_update_flag = True
-        time.sleep(0.5) # Dem Hintergrundprozess kurz Zeit geben
+        time.sleep(0.5)
     return redirect('/')
 
 @app.route('/update')
 def trigger_update():
     global force_update_flag
     force_update_flag = True
-    time.sleep(0.5) # Dem Hintergrundprozess kurz Zeit geben
+    time.sleep(0.5)
     return redirect('/')
 
 @app.route('/demo')
@@ -549,7 +551,7 @@ def trigger_demo():
     global force_update_flag, show_demo_once
     show_demo_once = True
     force_update_flag = True
-    time.sleep(0.5) # Dem Hintergrundprozess kurz Zeit geben, um den Cache zu füllen!
+    time.sleep(0.5)
     return redirect('/')
 
 @app.route('/toggle')
