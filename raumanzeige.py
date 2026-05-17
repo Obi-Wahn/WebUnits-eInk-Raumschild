@@ -12,7 +12,7 @@ import webuntis
 from flask import Flask, render_template_string, request, redirect
 from waitress import serve
 
-# RPi.GPIO und smbus2 (I2C) laden
+# RPi.GPIO und smbus2 (I2C) für die Hardware-Steuerung laden
 try:
     import RPi.GPIO as GPIO
 except ImportError:
@@ -26,7 +26,7 @@ except ImportError:
     print("Warnung: smbus2 ist nicht installiert. Bitte 'pip install smbus2' ausführen.")
     i2c_bus = None
 
-# Pfad zu den Waveshare-Treibern hinzufügen
+# Pfad zu den Waveshare-E-Paper-Treibern hinzufügen
 libdir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'e-Paper/RaspberryPi_JetsonNano/python/lib')
 if os.path.exists(libdir):
     sys.path.append(libdir)
@@ -37,25 +37,28 @@ from PIL import Image, ImageDraw, ImageFont
 app = Flask(__name__)
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'config.json')
 
-# Globale Flags & Variablen
-force_update_flag = True     # Startet auf True, damit direkt beim Booten geladen wird
-show_demo_once = False
-shutdown_event = threading.Event()   
-display_lock = threading.Lock()      
+# ==========================================
+# GLOBALE FLAGS & VARIABLEN
+# ==========================================
+force_update_flag = True             # Startet auf True, damit direkt beim Booten das Display aktualisiert wird
+show_demo_once = False               # Schalter für den Präsentations-Modus (Demo-Daten)
+shutdown_event = threading.Event()   # Erlaubt das saubere Beenden des Hintergrund-Threads
+display_lock = threading.Lock()      # Verhindert, dass Display und Webserver gleichzeitig auf SPI zugreifen
 
-# Globaler Cache für das Web-Interface (Spiegelung des Displays)
+# Globaler Cache für das Web-Interface (spart ständige, langsame API-Abfragen)
 current_display_data = None
 current_display_msg = "Warte auf erstes Update..."
 
-# Hardware-Konfiguration (Touch)
+# Hardware-Konfiguration (Touch-Controller GT1151)
 TOUCH_RST_PIN = 22
-TOUCH_I2C_ADDR = 0x14 # GT1151 Chip Adresse
+TOUCH_I2C_ADDR = 0x14                # I2C-Adresse des Touch-Chips
 
 # ==========================================
 # KONFIGURATION LADEN / SPEICHERN
 # ==========================================
 
 def load_config():
+    """Lädt die Einstellungen und den Stundenplan aus der config.json."""
     if not os.path.exists(CONFIG_FILE): return {}
     try:
         with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
@@ -66,6 +69,7 @@ def load_config():
         return {}
 
 def save_config(config):
+    """Speichert geänderte Einstellungen (z.B. aus dem Web-Interface) ab."""
     try:
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
             json.dump(config, f, indent=4, ensure_ascii=False)
@@ -77,11 +81,15 @@ def save_config(config):
 # ==========================================
 
 def check_touch_via_i2c():
+    """Prüft über den I2C-Bus, ob das Display berührt wurde."""
     if not i2c_bus: return False
     try:
+        # Register auslesen, das anzeigt, ob ein Touch-Event vorliegt
         write_msg = smbus.i2c_msg.write(TOUCH_I2C_ADDR, [0x81, 0x4E])
         read_msg = smbus.i2c_msg.read(TOUCH_I2C_ADDR, 1)
         i2c_bus.i2c_rdwr(write_msg, read_msg)
+        
+        # Bit 7 (0x80) gibt an, ob Daten bereitstehen
         if list(read_msg)[0] & 0x80:
             i2c_bus.write_i2c_block_data(TOUCH_I2C_ADDR, 0x81, [0x4E, 0x00])
             return True
@@ -89,6 +97,7 @@ def check_touch_via_i2c():
     return False
 
 def clear_touch_interrupt_via_i2c():
+    """Sendet ein Quittungssignal an den Touch-Chip, um ihn zurückzusetzen."""
     if not i2c_bus: return
     try: i2c_bus.write_i2c_block_data(TOUCH_I2C_ADDR, 0x81, [0x4E, 0x00])
     except: pass
@@ -98,6 +107,7 @@ def clear_touch_interrupt_via_i2c():
 # ==========================================
 
 def parse_lesson(lesson, conf):
+    """Hilfsfunktion: Extrahiert Fach, Lehrer, Klasse etc. aus einem WebUntis-Objekt."""
     if not lesson: return None
     schedule = conf.get("SCHEDULE", {})
     lessons_conf = schedule.get("LESSONS", [])
@@ -105,6 +115,7 @@ def parse_lesson(lesson, conf):
     start_str = lesson.start.strftime("%H:%M")
     stunde_name = ""
     
+    # Sucht den passenden Anzeigenamen (z.B. "1. Std.") aus der Config
     if isinstance(lessons_conf, list):
         for l in lessons_conf:
             if l.get("start") == start_str:
@@ -119,15 +130,17 @@ def parse_lesson(lesson, conf):
         "klasse": ", ".join([k.name for k in lesson.klassen]),
         "zeit": f"{start_str} - {lesson.end.strftime('%H:%M')}",
         "stunde": stunde_name,
-        "status_code": getattr(lesson, 'code', None)
+        "status_code": getattr(lesson, 'code', None) # Wichtig für Vertretungen/Ausfall
     }
 
 def get_current_lesson(conf):
+    """Verbindet sich mit WebUntis, holt den Tagesplan und filtert nach JETZT und DANACH."""
     if not conf or not conf.get('UNTIS_PASS'):
         return None, "Konfiguration unvollständig."
     
     session = None
     try:
+        # 1. Login bei WebUntis
         session = webuntis.Session(
             server=conf.get('UNTIS_SERVER', ''),
             username=conf.get('UNTIS_USER', ''),
@@ -136,6 +149,8 @@ def get_current_lesson(conf):
             useragent='WebUntis-Tuerschild'
         )
         session.login()
+        
+        # 2. Raum-ID ermitteln
         rooms = session.rooms().filter(name=conf.get('ROOM_NAME', ''))
         if not rooms:
             return None, f"Raum {conf.get('ROOM_NAME', 'Unbekannt')} fehlt."
@@ -144,9 +159,11 @@ def get_current_lesson(conf):
         now = datetime.datetime.now()
         now_time = now.time()
         
+        # Wochenende abfangen
         if now.weekday() >= 5: 
             return {"current": None, "next": None}, "Schönes Wochenende!"
             
+        # 3. Stundenplan für heute laden und sortieren
         timetable = session.timetable(room=rooms[0], start=today, end=today)
         if not timetable:
             return {"current": None, "next": None}, "Unterrichtsfrei"
@@ -155,13 +172,17 @@ def get_current_lesson(conf):
         current_lesson = None
         next_lesson = None
         
+        # 4. Aktuelle und nächste Stunde anhand der Uhrzeit bestimmen
         for lesson in timetable:
+            # 5-Minuten-Vorlauf: Das Display schaltet 5 Min vor Stundenbeginn um
             lesson_start_buffered = lesson.start - datetime.timedelta(minutes=5)
+            
             if lesson_start_buffered <= now <= lesson.end:
                 current_lesson = lesson
             elif lesson.start > now and next_lesson is None:
                 next_lesson = lesson
 
+        # 5. Pausen- und Freizeit-Texte ermitteln (falls gerade kein Unterricht ist)
         message = ""
         if current_lesson is None:
             schedule = conf.get("SCHEDULE", {})
@@ -179,6 +200,7 @@ def get_current_lesson(conf):
                     message = "Unterrichtsende"
                 else:
                     message = "Raum ist frei"
+                    # Prüfen, ob eine definierte Pause stattfindet
                     for b in breaks:
                         bs_h, bs_m = map(int, b.get("start", "00:00").split(":"))
                         be_h, be_m = map(int, b.get("end", "00:00").split(":"))
@@ -189,12 +211,14 @@ def get_current_lesson(conf):
                 print(f"Zeit-Parsing Fehler: {e}")
                 message = "Raum ist frei"
 
+        # Rückgabe der aufbereiteten Daten
         return {
             "current": parse_lesson(current_lesson, conf),
             "next": parse_lesson(next_lesson, conf)
         }, message
         
     except Exception as e:
+        # Fehlerbehandlung bei Netzwerk- oder Login-Problemen
         error_msg = str(e)
         if "HTTPSConnectionPool" in error_msg or "NameResolutionError" in error_msg or "Max retries" in error_msg:
             return None, "Fehler: Keine WLAN/Internet-Verbindung"
@@ -203,41 +227,48 @@ def get_current_lesson(conf):
         else:
             return None, "Fehler: WebUntis nicht erreichbar"
     finally:
+        # Sitzung immer sauber beenden
         if session:
             try: session.logout()
             except: pass
 
 def draw_lesson_block(draw, lesson_data, y_offset, label_text, f_small, f_reg, f_med):
+    """Zeichnet einen Unterrichtsblock (z.B. JETZT oder DANACH) auf das Display-Image."""
     header_text = f"{label_text} {lesson_data['stunde']} ({lesson_data['zeit']})"
     draw.text((5, y_offset), header_text, font=f_small, fill=0)
     
     status = lesson_data.get('status_code')
     y_content = y_offset + 16
     
+    # Sonderdarstellung für Ausfälle (Invertierter Block)
     if status == 'cancelled':
         draw.rectangle((5, y_content, 85, y_content + 18), fill=0)
         draw.text((8, y_content+2), "FÄLLT AUS", font=f_small, fill=255)
         draw.text((90, y_content), f"{lesson_data['klasse']}", font=f_reg, fill=0)
+    # Sonderdarstellung für Vertretungen
     elif status == 'irregular':
         draw.rectangle((5, y_content, 90, y_content + 18), fill=0)
         draw.text((8, y_content+2), "VERTRETUNG", font=f_small, fill=255)
         main_info = f"{lesson_data['fach']} | {lesson_data['klasse']} ({lesson_data['lehrer']})"
         draw.text((95, y_content), main_info, font=f_reg, fill=0)
+    # Normale Darstellung
     else:
         main_info = f"{lesson_data['fach']} | {lesson_data['klasse']} ({lesson_data['lehrer']})"
         draw.text((5, y_content), main_info, font=f_reg, fill=0)
 
 def update_display_logic(data, message, conf):
+    """Bereitet das Layout vor und sendet es an das Hardware-E-Paper."""
     if shutdown_event.is_set(): return 
     with display_lock: 
         try: 
+            # Hardware initialisieren
             epd = epd2in13_V3.EPD()
             epd.init()
-            image = Image.new('1', (epd.height, epd.width), 255)
+            image = Image.new('1', (epd.height, epd.width), 255) # Weißes Bild (250x122)
             draw = ImageDraw.Draw(image) 
             
+            # Schriftarten laden (Fallback auf Bitmap, falls nicht vorhanden)
             try: 
-                # Schriftgröße 16 sorgt für die sichere Zentrierung mitsamt Ausrufezeichen innerhalb der 250 Pixel
                 f_mega = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 16)
                 f_huge = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 24)
                 f_large = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 18) 
@@ -249,13 +280,13 @@ def update_display_logic(data, message, conf):
 
             now = datetime.datetime.now()
             
-            # Kopfzeile (Invertierter Balken)
+            # KOPFZEILE: Invertierter Balken mit Raumname und aktueller Uhrzeit
             draw.rectangle((0, 0, 250, 24), fill=0)
             draw.text((5, 3), conf.get('ROOM_NAME', 'Unbekannt'), font=f_med, fill=255)
             time_str = now.strftime("%d.%m.%Y %H:%M")
             draw.text((120, 5), time_str, font=f_small, fill=255)
 
-            # Prüfe, ob überhaupt aktiver Unterricht ansteht, andernfalls Zweiteilung ausblenden
+            # HAUPTBEREICH: Zweigeteilt (Jetzt/Danach) ODER Mittig (Wochenende)
             if data and isinstance(data, dict) and (data.get('current') or data.get('next')):
                 curr_lesson = data.get('current')
                 next_lesson = data.get('next')
@@ -277,7 +308,7 @@ def update_display_logic(data, message, conf):
                     draw.text((5, 74), "DANACH:", font=f_small, fill=0)
                     draw.text((5, 90), msg_text, font=f_reg, fill=0)
             else:
-                # Aufgeräumte Einzelmeldung zentrieren (Wochenende, Feiertag, vor Schulbeginn)
+                # Aufgeräumte Einzelmeldung (z.B. "Schönes Wochenende!") zentrieren
                 try:
                     bbox = draw.textbbox((0, 0), message, font=f_mega)
                     text_w = bbox[2] - bbox[0]
@@ -287,12 +318,14 @@ def update_display_logic(data, message, conf):
                 x_pos = (250 - text_w) / 2 if text_w < 250 else 2
                 draw.text((x_pos, 60), message, font=f_mega, fill=0)
 
+            # Bild an Display senden und schlafen legen (Strom sparen)
             epd.display(epd.getbuffer(image))
             epd.sleep()
         except Exception as e:
             print(f"Hardware-Fehler: {e}")
 
 def clear_display_once():
+    """Löscht das Display komplett (weiß), wenn das Schild deaktiviert wird."""
     if shutdown_event.is_set(): return
     with display_lock:
         try:
@@ -307,6 +340,7 @@ def clear_display_once():
 # ==========================================
 
 def background_loop():
+    """Der Haupt-Prozess: Läuft dauerhaft im Hintergrund und steuert die Updates."""
     global force_update_flag, show_demo_once, current_display_data, current_display_msg
     last_update = 0
     last_touch_time = time.time()
@@ -319,7 +353,8 @@ def background_loop():
             shutdown_event.wait(5)
             continue
 
-        # Dynamische Update-Zeiten aus der Konfiguration berechnen
+        # 1. DYNAMISCHE UPDATE-ZEITEN ERMITTELN
+        # Liest alle Start- und Endzeiten aus der config.json aus und ergänzt den 5-Min-Vorlauf
         schedule = conf.get("SCHEDULE", {})
         lessons_conf = schedule.get("LESSONS", [])
         dyn_update_times = set()
@@ -348,15 +383,18 @@ def background_loop():
         now_time = time.time()
         current_hm = datetime.datetime.now().strftime("%H:%M")
         
+        # 2. TRIGGER PRÜFEN (Ist es Zeit für ein Update?)
         is_exact_time = (current_hm in update_times) and (last_minute_triggered != current_hm)
         is_interval_reached = (now_time - last_update >= conf.get('AUTO_UPDATE_SECONDS', 900))
 
+        # 3. TOUCH ERKENNUNG (Zwingt sofortiges Update)
         if conf.get('TOUCH_ACTIVE', True) and check_touch_via_i2c():
-            if now_time - last_touch_time > 5.0:
+            if now_time - last_touch_time > 5.0: # 5 Sekunden Cooldown
                 print(f"\n[TOUCH {datetime.datetime.now().strftime('%H:%M:%S')}] Display beruehrt! Update wird vorbereitet...")
                 force_update_flag = True
             last_touch_time = now_time
 
+        # 4. DATEN ABRUFEN UND ZEICHNEN
         if force_update_flag or is_interval_reached or is_exact_time:
             if is_exact_time: last_minute_triggered = current_hm 
             
@@ -364,6 +402,7 @@ def background_loop():
             force_update_flag = False
             
             if conf.get('DISPLAY_ACTIVE', True):
+                # DEMO MODUS simulieren
                 if show_demo_once:
                     data = {
                         "current": {"fach": "Informatik", "lehrer": "Ab", "klasse": "11B", "zeit": "09:55 - 10:40", "stunde": "3. Std.", "status_code": "irregular"},
@@ -372,22 +411,25 @@ def background_loop():
                     err = ""
                     show_demo_once = False
                     print(f"[{current_hm}] DEMO-DATEN generiert!")
+                # ECHTE DATEN von WebUntis holen
                 else:
                     data, err = get_current_lesson(conf)
                 
-                # Übergabe in den globalen Cache zur Bereitstellung für das Web-Interface
+                # Caching für das schnelle Laden der Webseite
                 current_display_data = data
                 current_display_msg = err
 
                 current_date = datetime.date.today().strftime("%Y-%m-%d")
                 is_static_day = err in ["Schönes Wochenende!", "Unterrichtsfrei"]
                 
+                # Ruhemodus-Prüfung (Schont das Display an freien Tagen)
                 skip_update = False
                 if is_static_day and not is_manual:
                     if last_static_date == current_date: skip_update = True
                     else: last_static_date = current_date 
                 else: last_static_date = None 
                     
+                # An Display senden
                 if not skip_update:
                     update_display_logic(data, err, conf)
             else:
@@ -395,15 +437,16 @@ def background_loop():
                 
             last_update = time.time()
             time.sleep(1.5)
-            clear_touch_interrupt_via_i2c()
+            clear_touch_interrupt_via_i2c() # Touch-Chip zurücksetzen
             last_touch_time = time.time()
             
         shutdown_event.wait(0.5)
 
 # ==========================================
-# WEB-INTERFACE
+# WEB-INTERFACE (FLASK ROUTES)
 # ==========================================
 
+# Das HTML-Template für das Konfigurations-Panel
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="de">
@@ -513,6 +556,7 @@ HTML_TEMPLATE = """
                     {% endif %}
                     
                 {% else %}
+                    <!-- Aufgeräumter Wochenend-/Feiertags-Bildschirm im Webinterface -->
                     <div class="empty-state" style="font-size: 16px; padding: 30px 20px;">{{ msg }}</div>
                 {% endif %}
             </div>
@@ -525,6 +569,7 @@ HTML_TEMPLATE = """
 
 @app.route('/')
 def index():
+    """Startseite: Liest die Daten aus dem Cache, blockiert also nicht bei WebUntis-Anfragen."""
     conf = load_config()
     return render_template_string(
         HTML_TEMPLATE, 
@@ -536,6 +581,7 @@ def index():
 
 @app.route('/save', methods=['POST'])
 def save():
+    """Speichert Änderungen und erzwingt ein Display-Update."""
     conf = load_config()
     if conf:
         conf['ROOM_NAME'] = request.form.get('ROOM_NAME')
@@ -543,11 +589,12 @@ def save():
         save_config(conf)
         global force_update_flag
         force_update_flag = True
-        time.sleep(0.5)
+        time.sleep(0.5) # Kurze Pause, damit der Hintergrund-Thread reagieren kann
     return redirect('/')
 
 @app.route('/update')
 def trigger_update():
+    """Manueller Refresh-Button für WebUntis."""
     global force_update_flag
     force_update_flag = True
     time.sleep(0.5)
@@ -555,14 +602,16 @@ def trigger_update():
 
 @app.route('/demo')
 def trigger_demo():
+    """Lädt einmalig simulierte Vertretungsdaten auf das Display (für Präsentationen)."""
     global force_update_flag, show_demo_once
     show_demo_once = True
     force_update_flag = True
-    time.sleep(0.5) # Synchronisationspuffer für das sofortige Laden des Cache
+    time.sleep(0.5) 
     return redirect('/')
 
 @app.route('/toggle')
 def toggle_display():
+    """Schaltet das Hardware-Display an oder aus."""
     conf = load_config()
     if conf:
         conf['DISPLAY_ACTIVE'] = not conf.get('DISPLAY_ACTIVE', True)
@@ -574,6 +623,7 @@ def toggle_display():
 
 @app.route('/toggle_touch')
 def toggle_touch():
+    """Aktiviert/Deaktiviert die Touch-Fläche (I2C-Polling)."""
     conf = load_config()
     if conf:
         conf['TOUCH_ACTIVE'] = not conf.get('TOUCH_ACTIVE', True)
@@ -583,8 +633,12 @@ def toggle_touch():
         time.sleep(0.5)
     return redirect('/')
 
+# ==========================================
+# HAUPTPROGRAMM (ENTRY POINT)
+# ==========================================
 if __name__ == '__main__':
     try:
+        # Hardware-Reset des Touch-Chips einmalig beim Start durchführen
         if GPIO:
             try:
                 GPIO.setmode(GPIO.BCM)
@@ -598,26 +652,23 @@ if __name__ == '__main__':
             except Exception as e:
                 print(f"GPIO Setup Fehler: {e}")
 
+        # Hintergrund-Prozess für die API-Abfrage starten
         threading.Thread(target=background_loop, daemon=True).start()
-        local_ip = '0.0.0.0'
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(('10.255.255.255', 1))
-            local_ip = s.getsockname()[0]
-            s.close()
-        except: pass
             
         print(f" * Admin-Interface (Localhost): http://127.0.0.1:5000")
-        # Für den sicheren Nginx-Proxy-Betrieb an Localhost binden
+        
+        # Den lokalen Webserver über Waitress starten (wird nach außen durch Nginx per HTTPS geschützt)
         serve(app, host='127.0.0.1', port=5000)
         
     except KeyboardInterrupt:
+        # Bei Abbruch durch den Benutzer aufräumen
         shutdown_event.set()
     finally:
         shutdown_event.set()
         if GPIO: GPIO.cleanup()
         with display_lock:
             try:
+                # Display beim Beenden löschen
                 epd = epd2in13_V3.EPD()
                 epd.init()
                 epd.Clear(0xFF)
