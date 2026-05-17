@@ -43,7 +43,7 @@ Dieses Projekt baut auf mehreren Open-Source-Bibliotheken auf:
 
 ## **🚀 Installation & Einrichtung**
 
-Eine vollständige, Schritt-für-Schritt-Installationsanleitung (inklusive Nginx/HTTPS-Setup) findest du in der Datei **Installationsanleitung.md**.
+Eine vollständige, Schritt-für-Schritt-Installationsanleitung (inklusive Nginx/HTTPS-Setup) findest du in der Datei [**Installationsanleitung.md**](https://github.com/Obi-Wahn/WebUnits-eInk-Raumschild/blob/main/Installationsanleitung.md).
 
 ## **⚙️ Konfiguration (config.json)**
 
