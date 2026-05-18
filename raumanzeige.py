@@ -359,16 +359,16 @@ def run_display_test_sequence():
     test_mode_active = True
     conf = load_config()
     
-    # 8 verschiedene Test-Szenarien für den UI-Test
+    # 8 verschiedene Test-Szenarien für den UI-Test (mit anonymisierten Dummy-Daten)
     test_cases = [
         # 1. Normalbetrieb
-        ( {"current": {"fach": "Geschichte", "lehrer": "He", "klasse": "9B", "zeit": "08:00 - 08:45", "stunde": "1. Std.", "status_code": None},
-           "next": {"fach": "Informatik", "lehrer": "Ab", "klasse": "11B", "zeit": "08:50 - 09:35", "stunde": "2. Std.", "status_code": None}}, "" ),
+        ( {"current": {"fach": "Geschichte", "lehrer": "Ab", "klasse": "9B", "zeit": "08:00 - 08:45", "stunde": "1. Std.", "status_code": None},
+           "next": {"fach": "Informatik", "lehrer": "Cd", "klasse": "11B", "zeit": "08:50 - 09:35", "stunde": "2. Std.", "status_code": None}}, "" ),
         # 2. Ausfall
-        ( {"current": {"fach": "Religion", "lehrer": "He", "klasse": "7A", "zeit": "09:55 - 10:40", "stunde": "3. Std.", "status_code": "cancelled"},
-           "next": {"fach": "Geschichte", "lehrer": "He", "klasse": "12", "zeit": "10:45 - 11:30", "stunde": "4. Std.", "status_code": None}}, "" ),
+        ( {"current": {"fach": "Religion", "lehrer": "Ef", "klasse": "7A", "zeit": "09:55 - 10:40", "stunde": "3. Std.", "status_code": "cancelled"},
+           "next": {"fach": "Geschichte", "lehrer": "Ef", "klasse": "12", "zeit": "10:45 - 11:30", "stunde": "4. Std.", "status_code": None}}, "" ),
         # 3. Vertretung und danach frei
-        ( {"current": {"fach": "Werte u. Normen", "lehrer": "Xy", "klasse": "8C", "zeit": "11:45 - 12:30", "stunde": "5. Std.", "status_code": "irregular"},
+        ( {"current": {"fach": "Werte u. Normen", "lehrer": "Gk", "klasse": "8C", "zeit": "11:45 - 12:30", "stunde": "5. Std.", "status_code": "irregular"},
            "next": None}, "" ),
         # 4. Frei / Wochenende
         ( None, "Schönes Wochenende!" ),
@@ -466,7 +466,7 @@ def background_loop():
             force_update_flag = False
             
             if conf.get('DISPLAY_ACTIVE', True):
-                # Demo-Modus für Präsentationen (simulierte Echtdaten)
+                # Demo-Modus für Präsentationen (simulierte, anonyme Daten)
                 if show_demo_once:
                     data = {
                         "current": {"fach": "Informatik", "lehrer": "Ab", "klasse": "11B", "zeit": "09:55 - 10:40", "stunde": "3. Std.", "status_code": "irregular"},
