@@ -1,59 +1,61 @@
-# **WebUntis E-Paper Türschild (Raumanzeige)**
+# **WebUntis E-Paper-Raumanzeige**
 
-Automatisches, wartungsfreies E-Paper-Türschild für Schulen. Entwickelt aus der Praxis für die Praxis – ideal für den Einsatz im Schulalltag (getestet an einem Gymnasium in Niedersachsen).
+Dieses Projekt stellt ein automatisiertes, digitales Türschild für den Einsatz im schulischen Umfeld bereit. Das System synchronisiert sich selbstständig mit der WebUntis-API und visualisiert den aktuellen sowie den folgenden Unterricht auf einem energieeffizienten E-Paper-Display.
 
-Das System synchronisiert sich selbstständig mit der WebUntis-API und zeigt den aktuellen Stundenplan, Vertretungen, Ausfälle sowie die Folge-Stunden ("Jetzt / Danach") an. Inklusive I2C-Touch-Support und einem blitzschnellen, per **HTTPS verschlüsselten Admin-Webinterface**. Dieses Projekt läuft äußerst ressourcenschonend auf einem Raspberry Pi Zero 2 W (aarch64).
+*Hinweis: Dieses Projekt und die zugehörige Dokumentation wurden mit Unterstützung von KI-Modellen entwickelt und strukturiert.*
 
-*🤖 Hinweis: Dieses Projekt, der zugehörige Programmcode und die Dokumentation wurden mit Unterstützung von Künstlicher Intelligenz (KI) erstellt.*
+## **✨ Funktionsumfang**
 
-## **✨ Funktionen**
-
-* **Live-Synchronisation (Jetzt & Danach):** Holt den aktuellen Tagesplan für den konfigurierten Raum über die WebUntis-API. Das Display wird intelligent aufgeteilt und zeigt neben der laufenden Stunde auch direkt an, wer als Nächstes den Raum belegt.  
-* **Vertretungs- und Ausfallautomatik:** Fällt eine Stunde aus, wird dies mit einem markanten, invertierten Block ("FÄLLT AUS") signalisiert. Gleiches gilt für Vertretungsstunden inkl. Anzeige der Klasse.  
-* **Dynamischer Stundenplan:** Die genauen Unterrichts- und Pausenzeiten (inkl. 5-Minuten-Vorlauf) berechnet das Skript vollautomatisch anhand einer zentralen Konfigurationsdatei.  
-* **Smarte Zeiterkennung:** Erkennt Wochenenden und unterrichtsfreie Tage (Feiertage/Ferien) und schaltet das Display in einen schonenden Ruhemodus mit perfekt zentrierter Großschrift (nutzt fonts-dejavu).  
-* **Offline-Resilienz:** Fängt WLAN-Verbindungsabbrüche sauber ab und versucht es nach einem festgelegten Intervall erneut.  
-* **Kapazitiver Touch-Support:** Ein Tippen auf das Display erzwingt ein sofortiges Update. Ghost-Touches durch das E-Paper werden durch gezieltes I2C-Polling zuverlässig unterdrückt.  
-* **Sicheres Admin-Webinterface:** Eine lokal im Schulnetzwerk erreichbare Webseite spiegelt das Display live wider (Caching-System für Millisekunden-Ladezeiten). Die Übertragung der WebUntis-Zugangsdaten wird durch einen **Nginx Reverse Proxy mit HTTPS (SSL)** abgesichert. Ein Demo-Modus für Kollegiums-Präsentationen ist integriert.
+* **Automatisierte Synchronisation:** Abruf der aktuellen Plandaten über die WebUntis-API. Das Display zeigt übersichtlich die aktuell laufende Stunde ("JETZT") sowie die darauf folgende Belegung ("DANACH") an.  
+* **Ausfall- und Vertretungserkennung:** Planänderungen wie Ausfälle oder Vertretungen werden durch spezifische WebUntis-Statuscodes erkannt und visuell hervorgehoben (z. B. durch invertierte Darstellung).  
+* **Ressourcenschonender Ruhemodus:** Außerhalb der regulären Unterrichtszeiten (sowie an Wochenenden und Feiertagen) pausiert das System die regelmäßigen API-Abfragen und versetzt das Display in einen schonenden Standby-Modus.  
+* **Hardware-Interaktion:** Über einen kapazitiven Touch-Sensor (via I2C) kann jederzeit ein sofortiges manuelles Update des Displays erzwungen werden.  
+* **Sicheres Administrations-Interface:** Die Verwaltung erfolgt über ein lokales Web-Interface. Dieses ist durch Nginx als Reverse Proxy (HTTPS/SSL) sowie HTTP Basic Authentication abgesichert.  
+* **Sicherheitsarchitektur:** Zustandsändernde Aktionen im Web-Interface sind durch POST-Requests (CSRF-Schutz) gesichert. Schreibvorgänge in die Konfigurationsdatei erfolgen atomar, um Datenkorruption bei plötzlichem Stromausfall zu vermeiden.  
+* **Integrierte Diagnose:** Ein implementierter Testlauf ermöglicht die Überprüfung aller Display-Zustände und Fehlermeldungen direkt über das Web-Interface.
 
 ## **🛠️ Hardware-Voraussetzungen**
 
-* **Raspberry Pi Zero 2 W** (oder vergleichbares Modell, aarch64 fähig)  
+* **Raspberry Pi Zero 2 W** (oder ein vergleichbares, aarch64-fähiges Modell)  
 * **Waveshare e-Paper Display** (z. B. 2.13" kapazitiv Touch, V3)  
-* **MicroSD-Karte** (mit Raspberry Pi OS Lite \- getestet unter Trixie)
+* **MicroSD-Karte** (mit Raspberry Pi OS Lite, 64-bit empfohlen)
 
-## **📦 Verwendete Projekte & Abhängigkeiten**
+## **📦 Verwendete Komponenten & Abhängigkeiten**
 
-Dieses Projekt baut auf mehreren Open-Source-Bibliotheken auf:
+Das Projekt baut auf einer Reihe von Systempaketen und Python-Bibliotheken auf:
 
-### **System-Pakete**
+**System-Pakete (Raspberry Pi OS / Debian):**
 
-* python3-venv, git, i2c-tools  
-* libopenjp2-7, libtiff5, libxcb1 (für die Bildverarbeitung)  
-* fonts-dejavu (Essenziell für die Darstellung von Umlauten und dynamischen Schriftgrößen)  
-* nginx, openssl (Für die HTTPS/SSL-Verschlüsselung des Web-Interfaces)
+* python3-pip, python3-venv, git: Grundlegende Werkzeuge für die Python-Umgebung und Versionskontrolle.  
+* libopenjp2-7, libtiff5, libxcb1: Systembibliotheken, die für die Bildverarbeitung auf dem E-Paper-Display zwingend erforderlich sind.  
+* i2c-tools: Werkzeuge zur Diagnose und Kommunikation mit dem Touch-Controller.  
+* fonts-dejavu: Lokale Schriftarten für eine saubere, skalierbare Textdarstellung.  
+* nginx, openssl: Bereitstellung der sicheren HTTPS-Verbindung (Reverse Proxy).
 
-### **Python-Bibliotheken (via pip)**
+**Python-Bibliotheken:**
 
-* [**python-webuntis**](https://github.com/python-webuntis/python-webuntis): Die Schnittstelle zur WebUntis-API.  
-* [**Pillow**](https://python-pillow.github.io/): Die Python Imaging Library zum Zeichnen der Layouts.  
-* [**Flask**](https://flask.palletsprojects.com/) & [**Waitress**](https://docs.pylonsproject.org/projects/waitress/): Stellen den lokalen Webserver (127.0.0.1) bereit.  
-* [**Waveshare e-Paper**](https://github.com/waveshareteam/e-Paper): Die offiziellen Hardware-Treiber (SPI).  
-* [**smbus2**](https://pypi.org/project/smbus2/): Für die direkte I2C-Kommunikation mit dem Touch-Controller.
+* python-webuntis: Schnittstelle zur WebUntis-API.  
+* Pillow (PIL): Generierung des Bildmaterials und des Layouts für das Display.  
+* Flask & Waitress: Bereitstellung des lokalen Web-Interfaces.  
+* smbus2: Direkte I2C-Kommunikation mit dem kapazitiven Touch-Controller.
 
 ## **🚀 Installation & Einrichtung**
 
-Eine vollständige, Schritt-für-Schritt-Installationsanleitung (inklusive Nginx/HTTPS-Setup) findest du in der Datei [**Installationsanleitung.md**](https://github.com/Obi-Wahn/WebUnits-eInk-Raumschild/blob/main/Installationsanleitung.md).
+Eine vollständige, detaillierte Schritt-für-Schritt-Anleitung zur Einrichtung des Raspberry Pi, der Treiber und der Software finden Sie in der Datei [**Installationsanleitung.md**](http://docs.google.com/Installationsanleitung.md).
 
-## **⚙️ Konfiguration (config.json)**
+## **⚙️ Konfiguration**
 
-Das Skript benötigt eine config.json im Hauptverzeichnis. Hier ein Beispiel:
+Das Programm erfordert eine Konfigurationsdatei namens config.json im Hauptverzeichnis. Nutzen Sie die bereitgestellte Datei config.example.json als Vorlage.
+
+**Beispielkonfiguration:**
 
 {  
     "UNTIS\_SERVER": "demo.webuntis.com",  
-    "UNTIS\_SCHOOL": "muster\_schule",  
-    "UNTIS\_USER": "benutzername",  
-    "UNTIS\_PASS": "passwort",  
+    "UNTIS\_SCHOOL": "demo\_schule",  
+    "UNTIS\_USER": "webuntis\_benutzername",  
+    "UNTIS\_PASS": "webuntis\_passwort",  
+    "ADMIN\_USER": "admin",  
+    "ADMIN\_PASS": "passwort",  
     "ROOM\_NAME": "Raum101",  
     "AUTO\_UPDATE\_SECONDS": 900,  
     "DISPLAY\_ACTIVE": true,  
@@ -63,14 +65,28 @@ Das Skript benötigt eine config.json im Hauptverzeichnis. Hier ein Beispiel:
         "DAY\_END": "15:30",  
         "LESSONS": \[  
             {"start": "08:00", "end": "08:45", "name": "1. Std."},  
-            {"start": "08:50", "end": "09:35", "name": "2. Std."}  
+            {"start": "08:50", "end": "09:35", "name": "2. Std."},  
+            {"start": "09:55", "end": "10:40", "name": "3. Std."},  
+            {"start": "10:45", "end": "11:30", "name": "4. Std."},  
+            {"start": "11:45", "end": "12:30", "name": "5. Std."},  
+            {"start": "12:35", "end": "13:20", "name": "6. Std."},  
+            {"start": "13:55", "end": "14:40", "name": "7. Std."},  
+            {"start": "14:45", "end": "15:30", "name": "8. Std."}  
         \],  
         "BREAKS": \[  
-            {"start": "09:35", "end": "09:50", "name": "1. Pause"}  
+            {"start": "09:35", "end": "09:50", "name": "1. Pause"},  
+            {"start": "11:30", "end": "11:45", "name": "2. Pause"},  
+            {"start": "13:20", "end": "13:55", "name": "Mittagspause"}  
         \]  
     }  
 }
 
+### **🔒 Wichtige Hinweise zu Datenschutz und Sicherheit**
+
+1. **Dateirechte anpassen:** Stellen Sie sicher, dass die Zugangsdaten in der config.json vor dem unbefugten Auslesen durch andere lokale Benutzer geschützt sind. Führen Sie dazu auf dem System den Befehl chmod 600 config.json aus.  
+2. **Standard-Passwörter ändern:** Ändern Sie zwingend die voreingestellten Werte für ADMIN\_USER und ADMIN\_PASS in der config.json vor der ersten produktiven Inbetriebnahme im Netzwerk.  
+3. **Versionskontrolle (.gitignore):** Sollten Sie eigene Anpassungen an diesem Code-Repository vornehmen und dieses veröffentlichen wollen, stellen Sie sicher, dass die Datei config.json sowie etwaige Log-Dateien durch die .gitignore vom Upload ausgeschlossen sind. Reale Schul-, Nutzer- oder Zugangsdaten dürfen nicht in öffentliche Repositories gelangen.
+
 ## **📝 Lizenz & Nutzung**
 
-Dieses Projekt kann frei für den schulischen und edukativen Bereich genutzt, kopiert und modifiziert werden.
+Dieses Projekt kann für den schulischen und edukativen Bereich frei genutzt, modifiziert und weiterentwickelt werden.
