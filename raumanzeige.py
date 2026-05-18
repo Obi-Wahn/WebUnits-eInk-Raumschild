@@ -51,6 +51,7 @@ TOUCH_I2C_ADDR = 0x14                # I2C-Adresse des Touch-Chips
 # Steuerungs-Flags für den Hintergrund-Thread
 force_update_flag = True             # Startet auf True, damit direkt beim Booten das Display aktualisiert wird
 show_demo_once = False               # Schalter für den Präsentations-Modus (Demo-Daten)
+test_mode_active = False             # Blockiert reguläre Updates, während die Test-Routine läuft
 shutdown_event = threading.Event()   # Erlaubt das saubere Beenden des Hintergrund-Threads
 display_lock = threading.Lock()      # Verhindert, dass Display und Webserver gleichzeitig auf SPI zugreifen
 
@@ -235,7 +236,7 @@ def get_current_lesson(conf):
         }, message
         
     except Exception as e:
-        # Fehlerbehandlung bei Netzwerk- oder Login-Problemen (gekürzte Texte für das Display)
+        # Fehlerbehandlung bei Netzwerk- oder Login-Problemen (gekuerzte Texte für das E-Paper)
         error_msg = str(e)
         if "HTTPSConnectionPool" in error_msg or "NameResolutionError" in error_msg or "Max retries" in error_msg:
             return None, "Kein WLAN/Internet"
@@ -346,19 +347,72 @@ def update_display_logic(data, message, conf):
         except Exception as e:
             print(f"Hardware-Fehler: {e}")
 
+# ==============================================================================
+# 7. STEUERUNGS-EBENE: HINTERGRUND-LOOP & TEST-ROUTINE
+# ==============================================================================
 
-# ==============================================================================
-# 7. STEUERUNGS-EBENE: HINTERGRUND-LOOP (CONTROLLER)
-# ==============================================================================
+def run_display_test_sequence():
+    """Spielt nacheinander alle möglichen Layouts und Fehlermeldungen auf dem Display ab."""
+    global test_mode_active, current_display_data, current_display_msg, force_update_flag
+    
+    if test_mode_active: return
+    test_mode_active = True
+    conf = load_config()
+    
+    # 8 verschiedene Test-Szenarien für den UI-Test
+    test_cases = [
+        # 1. Normalbetrieb
+        ( {"current": {"fach": "Geschichte", "lehrer": "He", "klasse": "9B", "zeit": "08:00 - 08:45", "stunde": "1. Std.", "status_code": None},
+           "next": {"fach": "Informatik", "lehrer": "Ab", "klasse": "11B", "zeit": "08:50 - 09:35", "stunde": "2. Std.", "status_code": None}}, "" ),
+        # 2. Ausfall
+        ( {"current": {"fach": "Religion", "lehrer": "He", "klasse": "7A", "zeit": "09:55 - 10:40", "stunde": "3. Std.", "status_code": "cancelled"},
+           "next": {"fach": "Geschichte", "lehrer": "He", "klasse": "12", "zeit": "10:45 - 11:30", "stunde": "4. Std.", "status_code": None}}, "" ),
+        # 3. Vertretung und danach frei
+        ( {"current": {"fach": "Werte u. Normen", "lehrer": "Xy", "klasse": "8C", "zeit": "11:45 - 12:30", "stunde": "5. Std.", "status_code": "irregular"},
+           "next": None}, "" ),
+        # 4. Frei / Wochenende
+        ( None, "Schönes Wochenende!" ),
+        # 5. Feiertag / Ferien
+        ( None, "Unterrichtsfrei" ),
+        # 6. Fehler: WLAN
+        ( None, "Kein WLAN/Internet" ),
+        # 7. Fehler: Login
+        ( None, "Untis-Login falsch" ),
+        # 8. Fehler: Offline
+        ( None, "WebUntis offline" )
+    ]
+    
+    for idx, (data, msg) in enumerate(test_cases):
+        if shutdown_event.is_set(): break
+        
+        # Webinterface mit Teststatus aktualisieren
+        current_display_data = data
+        current_display_msg = f"TESTLAUF ({idx+1}/{len(test_cases)})..."
+        
+        # Das generierte Bild auf das Hardware-Display pushen
+        update_display_logic(data, msg, conf)
+        
+        # 4 Sekunden warten (Genug Zeit, damit das E-Paper lädt und der User es betrachten kann)
+        time.sleep(4)
+        
+    # Test beendet, Normalbetrieb wieder aufnehmen und sofortiges Update erzwingen
+    test_mode_active = False
+    force_update_flag = True
+
 def background_loop():
     """Läuft dauerhaft im Hintergrund, prüft die Zeit, Touch-Events und triggert Updates."""
-    global force_update_flag, show_demo_once, current_display_data, current_display_msg
+    global force_update_flag, show_demo_once, current_display_data, current_display_msg, test_mode_active
     last_update = 0
     last_touch_time = time.time()
     last_minute_triggered = None
     last_static_date = None
 
     while not shutdown_event.is_set():
+        # Solange die UI-Test-Routine läuft, macht der reguläre Haupt-Loop Pause
+        if test_mode_active:
+            shutdown_event.wait(1)
+            continue
+
         conf = load_config()
         if not conf:
             shutdown_event.wait(5)
@@ -399,7 +453,7 @@ def background_loop():
 
         # 3. Wurde das Display berührt?
         if conf.get('TOUCH_ACTIVE', True) and check_touch_via_i2c():
-            if now_time - last_touch_time > 5.0:
+            if now_time - last_touch_time > 5.0: # 5 Sekunden Cooldown
                 print(f"\n[TOUCH {datetime.datetime.now().strftime('%H:%M:%S')}] Display beruehrt! Update wird vorbereitet...")
                 force_update_flag = True
             last_touch_time = now_time
@@ -412,7 +466,7 @@ def background_loop():
             force_update_flag = False
             
             if conf.get('DISPLAY_ACTIVE', True):
-                # Demo-Modus für Präsentationen simulieren
+                # Demo-Modus für Präsentationen (simulierte Echtdaten)
                 if show_demo_once:
                     data = {
                         "current": {"fach": "Informatik", "lehrer": "Ab", "klasse": "11B", "zeit": "09:55 - 10:40", "stunde": "3. Std.", "status_code": "irregular"},
@@ -420,7 +474,6 @@ def background_loop():
                     }
                     err = ""
                     show_demo_once = False
-                    print(f"[{current_hm}] DEMO-DATEN generiert!")
                 else:
                     # Echtdaten von WebUntis abfragen
                     data, err = get_current_lesson(conf)
@@ -477,7 +530,8 @@ HTML_TEMPLATE = """
         .btn-update { background-color: #007BFF; } 
         .btn-demo { background-color: #6f42c1; } 
         .btn-off { background-color: #DC3545; }    
-        .btn-on { background-color: #28A745; }     
+        .btn-on { background-color: #28A745; } 
+        .btn-test { background-color: #f59e0b; grid-column: span 2; }    
         .btn-save { background-color: #0f172a; width: 100%; font-size: 16px; margin-top: 10px; color: white; padding: 15px; border-radius: 12px; font-weight: bold; }
         .form-group { margin-bottom: 20px; }
         label { display: block; font-size: 10px; font-weight: 800; color: #94a3b8; text-transform: uppercase; margin-bottom: 5px; }
@@ -511,6 +565,7 @@ HTML_TEMPLATE = """
                 <a href="/toggle_touch" class="btn {% if conf.get('TOUCH_ACTIVE', True) %}btn-off{% else %}btn-on{% endif %}">
                     {% if conf.get('TOUCH_ACTIVE', True) %}Touch aus{% else %}Touch an{% endif %}
                 </a>
+                <a href="/test_all" class="btn btn-test">Display-Testlauf starten (ca. 30 Sek)</a>
             </div>
             
             <form action="/save" method="POST">
@@ -617,6 +672,13 @@ def trigger_demo():
     show_demo_once = True
     force_update_flag = True
     time.sleep(0.5) 
+    return redirect('/')
+
+@app.route('/test_all')
+def trigger_test_all():
+    """Startet den Test-Thread im Hintergrund, damit das Webinterface nicht blockiert."""
+    threading.Thread(target=run_display_test_sequence, daemon=True).start()
+    time.sleep(0.5) # Kurze Pause, damit die "TESTLAUF aktiv..." Meldung direkt auf der Website erscheint
     return redirect('/')
 
 @app.route('/toggle')
