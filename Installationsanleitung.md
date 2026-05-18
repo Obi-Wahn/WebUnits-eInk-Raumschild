@@ -1,78 +1,109 @@
-# **Installationsanleitung: WebUntis Türschild (Raspberry Pi Zero 2 W)**
+# **Installationsanleitung: WebUntis E-Paper-Raumanzeige**
 
-*Hinweis: Dieses Projekt und der zugehörige Programmcode wurden mit Unterstützung von Künstlicher Intelligenz (KI) erstellt.*
+Diese Dokumentation beschreibt die vollständige Einrichtung der WebUntis-Raumanzeige auf einem Raspberry Pi. Die Architektur umfasst die Ansteuerung des E-Paper-Displays, die Synchronisation mit der WebUntis-API sowie die Bereitstellung eines lokalen, per HTTPS abgesicherten Administrations-Interfaces.
 
-Die vorliegende Anleitung dokumentiert die vollständige Einrichtung eines Raspberry Pi OS bis hin zum vollautomatischen, HTTPS-abgesicherten E-Paper-Türschild.
+## **Systemvoraussetzungen**
 
-**Voraussetzungen:** \* Raspberry Pi Zero 2 W mit installiertem **Raspberry Pi OS Lite** (64-bit empfohlen).
+* Hardware: Raspberry Pi Zero 2 W (oder vergleichbares Modell).  
+* Betriebssystem: Raspberry Pi OS Lite (64-bit wird empfohlen).  
+* Netzwerk: Konfigurierte WLAN-Verbindung und aktivierter SSH-Zugriff.  
+* Benutzer: Die Anleitung geht vom Standard-Benutzer pi aus. Bei abweichenden Benutzernamen sind die absoluten Pfade entsprechend anzupassen.
 
-* Konfigurierte WLAN-Verbindung und aktivierter SSH-Zugriff.  
-* Standard-Benutzername: pi (Bei abweichendem Benutzernamen sind die Pfade entsprechend anzupassen).
+## **1\. Systemkonfiguration**
 
-## **Phase 1: Systemschnittstellen & Sprache aktivieren**
+Stellen Sie eine SSH-Verbindung zum Raspberry Pi her und öffnen Sie das Konfigurationsmenü:
 
-1. SSH-Verbindung zum Raspberry Pi herstellen.  
-2. Konfigurationsmenü aufrufen: sudo raspi-config  
-3. **Schnittstellen:** Zu 3 Interface Options navigieren und **I4 SPI** sowie **I5 I2C** aktivieren.  
-4. **Zeitzone & Sprache:** Unter 5 Localisation Options:  
-   * L1 Locale: de\_DE.UTF-8 aktivieren und als Standard festlegen.  
-   * L2 Timezone: Europe \-\> Berlin auswählen.  
-5. Das Menü beenden und den **Neustart** bestätigen.
+sudo raspi-config
 
-## **Phase 2: System-Updates & Abhängigkeiten**
+1. **Schnittstellen aktivieren:** Navigieren Sie zu 3 Interface Options und aktivieren Sie **I4 SPI** sowie **I5 I2C**.  
+2. **Lokalisierung:** Navigieren Sie zu 5 Localisation Options.  
+   * Setzen Sie unter L1 Locale den Wert de\_DE.UTF-8 als Standard.  
+   * Konfigurieren Sie unter L2 Timezone die Zeitzone (Europe \-\> Berlin).  
+3. Beenden Sie das Menü und bestätigen Sie den anschließenden Neustart.
 
-1. Paketquellen aktualisieren:  
-   sudo apt update && sudo apt upgrade \-y
+## **2\. Paketquellen und Abhängigkeiten**
 
-2. Benötigte Systempakete installieren (inkl. Nginx für HTTPS und Schriftarten für Umlaute):  
-   sudo apt install \-y python3-pip python3-venv git libopenjp2-7 libtiff5 libxcb1 i2c-tools fonts-dejavu nginx openssl
+Aktualisieren Sie die Paketquellen und installieren Sie die benötigten Systempakete:
 
-## **Phase 3: Projektordner & Hardware-Treiber**
+sudo apt update && sudo apt upgrade \-y  
+sudo apt install \-y python3-pip python3-venv git libopenjp2-7 libtiff5 libxcb1 i2c-tools fonts-dejavu nginx openssl
 
-1. Projektordner erstellen und wechseln:  
-   cd \~  
-   mkdir webuntis-display  
-   cd webuntis-display
+## **3\. Projektverzeichnis und Treiber**
 
-2. Waveshare e-Paper Treiber über Git klonen:  
-   git clone \[https://github.com/waveshareteam/e-Paper.git\](https://github.com/waveshareteam/e-Paper.git)
+Erstellen Sie das Arbeitsverzeichnis und laden Sie die benötigten Hardware-Treiber für das Waveshare-Display herunter:
 
-## **Phase 4: Python Virtuelle Umgebung (venv)**
+cd \~  
+mkdir webuntis-display  
+cd webuntis-display  
+git clone \[https://github.com/waveshareteam/e-Paper.git\](https://github.com/waveshareteam/e-Paper.git)
 
-1. Virtuelle Umgebung erstellen und aktivieren:  
-   python3 \-m venv webuntis  
-   source webuntis/bin/activate
+## **4\. Python-Umgebung einrichten**
 
-2. Erforderliche Python-Bibliotheken installieren:  
-   pip install RPi.GPIO spidev Pillow webuntis flask waitress smbus2
+Um Konflikte mit systemweiten Paketen zu vermeiden, wird eine virtuelle Python-Umgebung (venv) verwendet:
 
-3. Umgebung deaktivieren:  
-   deactivate
+python3 \-m venv webuntis  
+source webuntis/bin/activate  
+pip install RPi.GPIO spidev Pillow webuntis flask waitress smbus2  
+deactivate
 
-## **Phase 5: Dateien anlegen**
+## **5\. Programmdateien und Konfiguration**
 
-Erstelle im Projektverzeichnis /home/pi/webuntis-display folgende Dateien (z. B. via nano):
+Erstellen Sie im Verzeichnis /home/pi/webuntis-display die folgenden Dateien:
 
-1. **raumanzeige.py**: Das Python-Hauptskript.  
-2. **config.json**: Konfiguration inkl. SCHEDULE-Block (siehe README).  
-3. **start.sh**: Start-Skript. Anschließend ausführbar machen:  
-   chmod \+x start.sh
+1. **raumanzeige.py**: Fügen Sie den vollständigen Python-Code des Hauptprogramms ein.  
+2. **config.json**: Erstellen Sie die Konfigurationsdatei. Nutzen Sie folgendes Schema und passen Sie die Parameter an Ihre Gegebenheiten an:
 
-## **Phase 6: HTTPS & Nginx Reverse Proxy einrichten**
+{  
+    "UNTIS\_SERVER": "demo.webuntis.com",  
+    "UNTIS\_SCHOOL": "muster\_schule",  
+    "UNTIS\_USER": "benutzername",  
+    "UNTIS\_PASS": "passwort",  
+    "ADMIN\_USER": "admin",  
+    "ADMIN\_PASS": "tuerschild",  
+    "ROOM\_NAME": "Raum 101",  
+    "AUTO\_UPDATE\_SECONDS": 900,  
+    "DISPLAY\_ACTIVE": true,  
+    "TOUCH\_ACTIVE": true,  
+    "SCHEDULE": {  
+        "DAY\_START": "07:55",  
+        "DAY\_END": "15:30",  
+        "LESSONS": \[  
+            {"start": "08:00", "end": "08:45", "name": "1. Std."},  
+            {"start": "08:50", "end": "09:35", "name": "2. Std."}  
+        \],  
+        "BREAKS": \[  
+            {"start": "09:35", "end": "09:50", "name": "1. Pause"}  
+        \]  
+    }  
+}
 
-Um das Admin-Interface und die WebUntis-Passwörter im Schulnetzwerk zu schützen, leiten wir den internen Server (Port 5000\) durch einen Nginx-Server mit SSL-Zertifikat.
+*Wichtiger Hinweis zu den Zugangsdaten:* Die Parameter ADMIN\_USER und ADMIN\_PASS definieren den Zugang für das Web-Interface. Ändern Sie diese zwingend vor der Inbetriebnahme.
 
-1. **Selbstsigniertes Zertifikat erstellen** (10 Jahre Gültigkeit):  
+## **6\. Datenschutz und Sicherheit**
+
+Um die sensiblen Zugangsdaten (WebUntis-Login und Admin-Passwort) vor unbefugtem Auslesen durch andere lokale Benutzer oder kompromittierte Prozesse zu schützen, müssen die Dateirechte der Konfiguration strikt limitiert werden.
+
+Führen Sie folgenden Befehl aus, damit nur der Besitzer der Datei Lese- und Schreibrechte besitzt:
+
+chmod 600 /home/pi/webuntis-display/config.json
+
+*Versionskontrolle:* Sollten Sie den Code über ein öffentliches Repository (z. B. GitHub) verwalten, stellen Sie zwingend sicher, dass die Datei config.json in der .gitignore-Datei aufgeführt ist, um einen versehentlichen Upload von Zugangsdaten und schulbezogenen Informationen zu verhindern.
+
+## **7\. Nginx Reverse Proxy und HTTPS**
+
+Der in Python integrierte Webserver (Waitress) wird ausschließlich an den Localhost (127.0.0.1) gebunden. Nginx übernimmt die Rolle des Reverse Proxys und sichert die Verbindung nach außen über HTTPS ab.
+
+1. **SSL-Zertifikat generieren:**  
+   Erstellen Sie ein selbstsigniertes Zertifikat. Die Zertifikatsdetails (-subj) sind neutrale Platzhalter und können nach Ermessen angepasst werden.  
    sudo openssl req \-x509 \-nodes \-days 3650 \-newkey rsa:2048 \\  
      \-keyout /etc/ssl/private/tuerschild.key \\  
      \-out /etc/ssl/certs/tuerschild.crt \\  
      \-subj "/C=DE/ST=Bundesland/L=Musterstadt/O=Musterschule/CN=tuerschild.local"
 
-   *(Passe die Daten im \-subj Parameter optional an deine Schule an).*  
-2. **Nginx konfigurieren**:  
+2. **Nginx Konfiguration erstellen:**  
    sudo nano /etc/nginx/sites-available/tuerschild
 
-   Folgenden Inhalt einfügen:  
+   Fügen Sie folgenden Inhalt ein:  
    server {  
        listen 443 ssl;  
        server\_name \_;
@@ -95,19 +126,21 @@ Um das Admin-Interface und die WebUntis-Passwörter im Schulnetzwerk zu schütze
        return 301 https://$host$request\_uri;  
    }
 
-3. **Nginx aktivieren und neu starten**:  
+3. **Konfiguration aktivieren:**  
    sudo ln \-s /etc/nginx/sites-available/tuerschild /etc/nginx/sites-enabled/  
    sudo rm /etc/nginx/sites-enabled/default  
    sudo systemctl restart nginx
 
-## **Phase 7: Autostart-Service (systemd) einrichten**
+## **8\. Systemdienst (Autostart) einrichten**
 
-1. Service-Datei anlegen:  
+Damit das Programm bei einem Neustart des Raspberry Pi automatisch ausgeführt wird, wird ein systemd-Service angelegt.
+
+1. **Service-Datei erstellen:**  
    sudo nano /etc/systemd/system/raumanzeige.service
 
-2. Folgende Konfiguration einfügen:  
+2. **Konfiguration einfügen:**  
    \[Unit\]  
-   Description=WebUntis Raumanzeige Tuerschild  
+   Description=WebUntis Raumanzeige Service  
    After=network-online.target  
    Wants=network-online.target
 
@@ -123,11 +156,9 @@ Um das Admin-Interface und die WebUntis-Passwörter im Schulnetzwerk zu schütze
    \[Install\]  
    WantedBy=multi-user.target
 
-3. Dienst aktivieren und starten:  
+3. **Dienst aktivieren und starten:**  
    sudo systemctl daemon-reload  
    sudo systemctl enable raumanzeige.service  
    sudo systemctl start raumanzeige.service
 
-🎉 **Fertig\!** Das Türschild läuft nun vollautomatisch. Das Administrations-Panel ist sicher verschlüsselt erreichbar unter:
-
-https://\[IP-ADRESSE-DES-PI\] *(Browser-Warnung bezüglich des selbstsignierten Zertifikats einfach ignorieren/akzeptieren).*
+Die Installation ist damit abgeschlossen. Das Administrations-Interface ist netzwerkintern unter der IP-Adresse des Raspberry Pi über HTTPS erreichbar (z. B. https://10.x.x.x). Browser-Warnungen bezüglich des selbstsignierten Zertifikats müssen für den Zugriff bestätigt werden.
