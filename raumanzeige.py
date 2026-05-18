@@ -235,14 +235,14 @@ def get_current_lesson(conf):
         }, message
         
     except Exception as e:
-        # Fehlerbehandlung bei Netzwerk- oder Login-Problemen
+        # Fehlerbehandlung bei Netzwerk- oder Login-Problemen (gekürzte Texte für das Display)
         error_msg = str(e)
         if "HTTPSConnectionPool" in error_msg or "NameResolutionError" in error_msg or "Max retries" in error_msg:
-            return None, "Fehler: Keine WLAN/Internet-Verbindung"
+            return None, "Kein WLAN/Internet"
         elif "LoginError" in error_msg or "Unauthorized" in error_msg:
-            return None, "Fehler: WebUntis Login falsch"
+            return None, "Untis-Login falsch"
         else:
-            return None, "Fehler: WebUntis nicht erreichbar"
+            return None, "WebUntis offline"
     finally:
         # Sitzung immer sauber beenden, um Serverressourcen zu schonen
         if session:
