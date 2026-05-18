@@ -34,10 +34,11 @@ Das Projekt baut auf einer Reihe von Systempaketen und Python-Bibliotheken auf:
 
 **Python-Bibliotheken:**
 
-* python-webuntis: Schnittstelle zur WebUntis-API.  
-* Pillow (PIL): Generierung des Bildmaterials und des Layouts für das Display.  
-* Flask & Waitress: Bereitstellung des lokalen Web-Interfaces.  
-* smbus2: Direkte I2C-Kommunikation mit dem kapazitiven Touch-Controller.
+* [**python-webuntis**](https://github.com/python-webuntis/python-webuntis): Schnittstelle zur WebUntis-API.  
+* [**Pillow**](https://python-pillow.github.io/): Generierung des Bildmaterials und des Layouts für das Display.  
+* [**Flask**](https://flask.palletsprojects.com/) & [**Waitress**](https://docs.pylonsproject.org/projects/waitress/): Bereitstellung des lokalen Web-Interfaces.
+* [**Waveshare e-Paper**](https://github.com/waveshareteam/e-Paper): Die offiziellen Hardware-Treiber (SPI).
+* [**smbus2**](https://pypi.org/project/smbus2/)2: Direkte I2C-Kommunikation mit dem kapazitiven Touch-Controller.
 
 ## **🚀 Installation & Einrichtung**
 
