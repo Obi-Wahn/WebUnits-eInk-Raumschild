@@ -445,11 +445,25 @@ def background_loop():
         update_times = list(dyn_update_times)
 
         now_time = time.time()
-        current_hm = datetime.datetime.now().strftime("%H:%M")
+        current_dt = datetime.datetime.now()
+        current_hm = current_dt.strftime("%H:%M")
+        current_time_obj = current_dt.time()
         
+        # NEU: Prüfen, ob wir uns in der relevanten Schulzeit befinden (1 Std. vorher bis 1 Std. nachher)
+        try:
+            ds_h, ds_m = map(int, schedule.get("DAY_START", "07:55").split(":"))
+            de_h, de_m = map(int, schedule.get("DAY_END", "15:30").split(":"))
+            active_start = datetime.time(max(0, ds_h - 1), ds_m)
+            active_end = datetime.time(min(23, de_h + 1), de_m)
+            is_active_hours = active_start <= current_time_obj <= active_end
+        except:
+            is_active_hours = True # Fallback bei Konfigurationsfehlern
+
         # 2. Ist es Zeit für ein turnusmäßiges oder punktgenaues Update?
         is_exact_time = (current_hm in update_times) and (last_minute_triggered != current_hm)
-        is_interval_reached = (now_time - last_update >= conf.get('AUTO_UPDATE_SECONDS', 900))
+        
+        # Intervall-Updates nur ausführen, wenn wir uns in den aktiven Stunden befinden
+        is_interval_reached = (now_time - last_update >= conf.get('AUTO_UPDATE_SECONDS', 900)) and is_active_hours
 
         # 3. Wurde das Display berührt?
         if conf.get('TOUCH_ACTIVE', True) and check_touch_via_i2c():
