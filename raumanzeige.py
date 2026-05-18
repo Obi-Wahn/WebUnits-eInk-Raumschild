@@ -519,24 +519,30 @@ HTML_TEMPLATE = """
     <title>Türschild-Admin</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f1f5f9; color: #1e293b; margin: 0; padding: 20px; display: flex; justify-content: center; }
-        .card { background: white; max-width: 400px; width: 100%; border-radius: 20px; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1); overflow: hidden; margin-top: 20px; }
+        .card { background: white; max-width: 400px; width: 100%; border-radius: 20px; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1); overflow: hidden; margin-top: 20px; margin-bottom: 20px; }
         .header { background-color: #0f172a; color: white; padding: 30px; }
         .header h1 { margin: 0; font-size: 24px; letter-spacing: -1px; text-transform: uppercase; }
         .header p { margin: 5px 0 0; opacity: 0.6; font-size: 12px; font-weight: bold; }
         .content { padding: 30px; }
-        .btn-group { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 25px; }
+        
+        .section-title { font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; margin: 30px 0 15px 0; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px; letter-spacing: 0.5px; }
+        .section-title:first-child { margin-top: 0; }
+        
+        .btn-group { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; }
+        .btn-full { grid-column: span 2; }
         .btn { display: block; text-decoration: none; text-align: center; padding: 15px; border-radius: 12px; font-weight: bold; color: white; transition: transform 0.1s; border: none; cursor: pointer; font-size: 14px;}
         .btn:active { transform: scale(0.98); }
         .btn-update { background-color: #007BFF; } 
         .btn-demo { background-color: #6f42c1; } 
         .btn-off { background-color: #DC3545; }    
         .btn-on { background-color: #28A745; } 
-        .btn-test { background-color: #f59e0b; grid-column: span 2; }    
-        .btn-save { background-color: #0f172a; width: 100%; font-size: 16px; margin-top: 10px; color: white; padding: 15px; border-radius: 12px; font-weight: bold; }
+        .btn-test { background-color: #f59e0b; }    
+        .btn-save { background-color: #0f172a; width: 100%; font-size: 16px; margin-top: 5px; color: white; padding: 15px; border-radius: 12px; font-weight: bold; }
+        
         .form-group { margin-bottom: 20px; }
         label { display: block; font-size: 10px; font-weight: 800; color: #94a3b8; text-transform: uppercase; margin-bottom: 5px; }
         input { width: 100%; box-sizing: border-box; background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 12px; border-radius: 10px; font-size: 14px; font-weight: 600; outline: none; }
-        .timetable-section { margin-top: 35px; padding-top: 25px; border-top: 1px solid #e2e8f0; }
+        
         .lesson-block { background: #f8fafc; border-radius: 10px; padding: 15px; margin-top: 10px; border: 1px solid #e2e8f0; }
         .empty-state { text-align: center; color: #94a3b8; font-size: 13px; padding: 20px; background: #f8fafc; border-radius: 10px; margin-top: 10px; font-weight: bold; }
         .error-msg { background-color: #fee2e2; color: #dc2626; padding: 15px; border-radius: 10px; font-size: 13px; font-weight: bold; text-align: center; margin-bottom: 20px; }
@@ -547,27 +553,31 @@ HTML_TEMPLATE = """
 </head>
 <body>
     <div class="card">
+        <!-- 1. KOPFZEILE -->
         <div class="header">
             <h1>Display-Control</h1>
             <p>{{ conf.get('ROOM_NAME', 'Unbekannt') }} | Raumanzeige</p>
         </div>
+        
         <div class="content">
             {% if conf|length == 0 %}
                 <div class="error-msg">Konfigurationsfehler! Die Datei 'config.json' konnte nicht gelesen werden.</div>
             {% endif %}
             
+            <!-- 2. GERÄTESTEUERUNG -->
+            <div class="section-title">Gerätesteuerung</div>
             <div class="btn-group">
-                <a href="/update" class="btn btn-update">Update</a>
-                <a href="/demo" class="btn btn-demo">Demo-Daten</a>
+                <a href="/update" class="btn btn-update btn-full">Manuelles Update</a>
                 <a href="/toggle" class="btn {% if conf.get('DISPLAY_ACTIVE', True) %}btn-off{% else %}btn-on{% endif %}">
                     {% if conf.get('DISPLAY_ACTIVE', True) %}Display aus{% else %}Display an{% endif %}
                 </a>
                 <a href="/toggle_touch" class="btn {% if conf.get('TOUCH_ACTIVE', True) %}btn-off{% else %}btn-on{% endif %}">
                     {% if conf.get('TOUCH_ACTIVE', True) %}Touch aus{% else %}Touch an{% endif %}
                 </a>
-                <a href="/test_all" class="btn btn-test">Display-Testlauf starten (ca. 30 Sek)</a>
             </div>
             
+            <!-- 3. EINSTELLUNGEN -->
+            <div class="section-title">Einstellungen</div>
             <form action="/save" method="POST">
                 <div class="form-group">
                     <label>Anzeigeraum</label>
@@ -580,9 +590,9 @@ HTML_TEMPLATE = """
                 <button type="submit" class="btn btn-save">Speichern</button>
             </form>
             
-            <div class="timetable-section">
-                <label>Aktuelle Anzeige ({{ conf.get('ROOM_NAME', '') }})</label>
-                
+            <!-- 4. STATUS -->
+            <div class="section-title">Aktuelle Anzeige ({{ conf.get('ROOM_NAME', '') }})</div>
+            <div>
                 {% if data and data is mapping and (data.current or data.next) %}
                     <h4 style="margin: 15px 0 5px 0; font-size: 12px; color: #64748b;">JETZT</h4>
                     {% if data.current %}
@@ -625,6 +635,14 @@ HTML_TEMPLATE = """
                     <div class="empty-state" style="font-size: 16px; padding: 30px 20px;">{{ msg }}</div>
                 {% endif %}
             </div>
+            
+            <!-- 5. TEST & SIMULATION -->
+            <div class="section-title">Test & Simulation</div>
+            <div class="btn-group">
+                <a href="/demo" class="btn btn-demo btn-full">Simulierte Daten laden</a>
+                <a href="/test_all" class="btn btn-test btn-full">Display-Testlauf starten (ca. 30 Sek)</a>
+            </div>
+            
             <p class="footer">Status: {{ now }}</p>
         </div>
     </div>
