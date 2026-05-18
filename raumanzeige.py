@@ -11,8 +11,10 @@ import datetime
 import json
 import threading
 import socket
+import tempfile
 import webuntis
-from flask import Flask, render_template_string, request, redirect
+from functools import wraps
+from flask import Flask, render_template_string, request, redirect, Response
 from waitress import serve
 from PIL import Image, ImageDraw, ImageFont
 
@@ -61,7 +63,7 @@ current_display_msg = "Warte auf erstes Update..."
 
 
 # ==============================================================================
-# 3. KONFIGURATIONS-VERWALTUNG
+# 3. KONFIGURATIONS-VERWALTUNG (Atomar gehärtet)
 # ==============================================================================
 def load_config():
     """Lädt die Einstellungen und den Stundenplan aus der config.json."""
@@ -75,10 +77,15 @@ def load_config():
         return {}
 
 def save_config(config):
-    """Speichert geänderte Einstellungen (z.B. aus dem Web-Interface) ab."""
+    """Speichert Einstellungen stromausfallsicher (atomarer Schreibvorgang)."""
     try:
-        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+        dir_name = os.path.dirname(CONFIG_FILE)
+        # Erstelle zuerst eine temporäre, versteckte Datei
+        fd, temp_path = tempfile.mkstemp(dir=dir_name, text=True)
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
             json.dump(config, f, indent=4, ensure_ascii=False)
+        # Tausche die Dateien in einem Rutsch aus (schützt vor Korruption bei Stromausfall)
+        os.replace(temp_path, CONFIG_FILE)
     except Exception as e:
         print(f"FEHLER beim Speichern der config.json: {e}")
 
@@ -100,14 +107,17 @@ def check_touch_via_i2c():
             # Quittung senden: "Habe den Touch registriert, setze Alarm zurück"
             i2c_bus.write_i2c_block_data(TOUCH_I2C_ADDR, 0x81, [0x4E, 0x00])
             return True
-    except: pass
+    except Exception: 
+        pass # Stummes Ignorieren für reibungslosen Ablauf, falls Display schläft
     return False
 
 def clear_touch_interrupt_via_i2c():
     """Sendet ein Quittungssignal an den Touch-Chip, um ihn zurückzusetzen."""
     if not i2c_bus: return
-    try: i2c_bus.write_i2c_block_data(TOUCH_I2C_ADDR, 0x81, [0x4E, 0x00])
-    except: pass
+    try: 
+        i2c_bus.write_i2c_block_data(TOUCH_I2C_ADDR, 0x81, [0x4E, 0x00])
+    except Exception as e: 
+        print(f"I2C Reset Fehler: {e}")
 
 def clear_display_once():
     """Löscht das E-Paper-Display komplett (weiß), z.B. wenn das Schild deaktiviert wird."""
@@ -118,7 +128,8 @@ def clear_display_once():
             epd.init()
             epd.Clear(0xFF)
             epd.sleep()
-        except: pass
+        except Exception as e: 
+            print(f"Display Clear Fehler: {e}")
 
 
 # ==============================================================================
@@ -157,6 +168,9 @@ def get_current_lesson(conf):
         return None, "Konfiguration unvollständig."
     
     session = None
+    # Verhindert, dass die WebUntis-API das Skript für immer blockiert, falls offline
+    socket.setdefaulttimeout(30) 
+    
     try:
         # 1. Login bei WebUntis
         session = webuntis.Session(
@@ -236,9 +250,10 @@ def get_current_lesson(conf):
         }, message
         
     except Exception as e:
-        # Fehlerbehandlung bei Netzwerk- oder Login-Problemen (gekuerzte Texte für das E-Paper)
+        # Fehlerbehandlung bei Netzwerk- oder Login-Problemen (gekürzte Texte für das E-Paper)
         error_msg = str(e)
-        if "HTTPSConnectionPool" in error_msg or "NameResolutionError" in error_msg or "Max retries" in error_msg:
+        print(f"WebUntis API Fehler: {error_msg}")
+        if "HTTPSConnectionPool" in error_msg or "NameResolutionError" in error_msg or "Max retries" in error_msg or "timeout" in error_msg.lower():
             return None, "Kein WLAN/Internet"
         elif "LoginError" in error_msg or "Unauthorized" in error_msg:
             return None, "Untis-Login falsch"
@@ -345,46 +360,36 @@ def update_display_logic(data, message, conf):
             epd.display(epd.getbuffer(image))
             epd.sleep()
         except Exception as e:
-            print(f"Hardware-Fehler: {e}")
+            print(f"Hardware-Fehler (Display): {e}")
+
 
 # ==============================================================================
 # 7. STEUERUNGS-EBENE: HINTERGRUND-LOOP & TEST-ROUTINE
 # ==============================================================================
-
 def run_display_test_sequence():
     """Spielt nacheinander alle möglichen Layouts und Fehlermeldungen auf dem Display ab."""
     global test_mode_active, current_display_data, current_display_msg, force_update_flag
     
-    if test_mode_active: return
     test_mode_active = True
     conf = load_config()
     
     # 8 verschiedene Test-Szenarien für den UI-Test (mit anonymisierten Dummy-Daten)
     test_cases = [
-        # 1. Normalbetrieb
         ( {"current": {"fach": "Geschichte", "lehrer": "Ab", "klasse": "9B", "zeit": "08:00 - 08:45", "stunde": "1. Std.", "status_code": None},
            "next": {"fach": "Informatik", "lehrer": "Cd", "klasse": "11B", "zeit": "08:50 - 09:35", "stunde": "2. Std.", "status_code": None}}, "" ),
-        # 2. Ausfall
         ( {"current": {"fach": "Religion", "lehrer": "Ef", "klasse": "7A", "zeit": "09:55 - 10:40", "stunde": "3. Std.", "status_code": "cancelled"},
            "next": {"fach": "Geschichte", "lehrer": "Ef", "klasse": "12", "zeit": "10:45 - 11:30", "stunde": "4. Std.", "status_code": None}}, "" ),
-        # 3. Vertretung und danach frei
         ( {"current": {"fach": "Werte u. Normen", "lehrer": "Gk", "klasse": "8C", "zeit": "11:45 - 12:30", "stunde": "5. Std.", "status_code": "irregular"},
            "next": None}, "" ),
-        # 4. Frei / Wochenende
         ( None, "Schönes Wochenende!" ),
-        # 5. Feiertag / Ferien
         ( None, "Unterrichtsfrei" ),
-        # 6. Fehler: WLAN
         ( None, "Kein WLAN/Internet" ),
-        # 7. Fehler: Login
         ( None, "Untis-Login falsch" ),
-        # 8. Fehler: Offline
         ( None, "WebUntis offline" )
     ]
     
     for idx, (data, msg) in enumerate(test_cases):
         if shutdown_event.is_set(): break
-        
         # Webinterface mit Teststatus aktualisieren
         current_display_data = data
         current_display_msg = f"TESTLAUF ({idx+1}/{len(test_cases)})..."
@@ -449,7 +454,7 @@ def background_loop():
         current_hm = current_dt.strftime("%H:%M")
         current_time_obj = current_dt.time()
         
-        # NEU: Prüfen, ob wir uns in der relevanten Schulzeit befinden (1 Std. vorher bis 1 Std. nachher)
+        # 2. Prüfen, ob wir uns in der relevanten Schulzeit befinden (1 Std. vorher bis 1 Std. nachher)
         try:
             ds_h, ds_m = map(int, schedule.get("DAY_START", "07:55").split(":"))
             de_h, de_m = map(int, schedule.get("DAY_END", "15:30").split(":"))
@@ -457,22 +462,22 @@ def background_loop():
             active_end = datetime.time(min(23, de_h + 1), de_m)
             is_active_hours = active_start <= current_time_obj <= active_end
         except:
-            is_active_hours = True # Fallback bei Konfigurationsfehlern
+            is_active_hours = True 
 
-        # 2. Ist es Zeit für ein turnusmäßiges oder punktgenaues Update?
+        # 3. Ist es Zeit für ein turnusmäßiges oder punktgenaues Update?
         is_exact_time = (current_hm in update_times) and (last_minute_triggered != current_hm)
         
         # Intervall-Updates nur ausführen, wenn wir uns in den aktiven Stunden befinden
         is_interval_reached = (now_time - last_update >= conf.get('AUTO_UPDATE_SECONDS', 900)) and is_active_hours
 
-        # 3. Wurde das Display berührt?
+        # 4. Wurde das Display berührt?
         if conf.get('TOUCH_ACTIVE', True) and check_touch_via_i2c():
             if now_time - last_touch_time > 5.0: # 5 Sekunden Cooldown
                 print(f"\n[TOUCH {datetime.datetime.now().strftime('%H:%M:%S')}] Display beruehrt! Update wird vorbereitet...")
                 force_update_flag = True
             last_touch_time = now_time
 
-        # 4. Daten holen und Update ausführen
+        # 5. Daten holen und Update ausführen
         if force_update_flag or is_interval_reached or is_exact_time:
             if is_exact_time: last_minute_triggered = current_hm 
             
@@ -521,8 +526,31 @@ def background_loop():
 
 
 # ==============================================================================
-# 8. WEB-EBENE: FLASK ADMIN-INTERFACE & ROUTEN
+# 8. WEB-EBENE: FLASK ADMIN-INTERFACE & ROUTEN (Gehärtet)
 # ==============================================================================
+def check_auth(username, password):
+    """Prüft Username und Passwort gegen die config.json"""
+    conf = load_config()
+    # Lade die Zugangsdaten aus der Config, nutze "admin" / "tuerschild" als Rückfall
+    u = conf.get('ADMIN_USER', 'admin')
+    p = conf.get('ADMIN_PASS', 'tuerschild')
+    return username == u and password == p
+
+def authenticate():
+    """Fordert den Browser auf, ein Login-Fenster (Basic Auth) anzuzeigen"""
+    return Response(
+    'Zugriff verweigert. Bitte korrekte Zugangsdaten eingeben.\n', 401,
+    {'WWW-Authenticate': 'Basic realm="Tuerschild Admin-Bereich"'})
+
+def requires_auth(f):
+    """Sicherheits-Dekorator für alle geschützten Routen"""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth = request.authorization
+        if not auth or not check_auth(auth.username, auth.password):
+            return authenticate()
+        return f(*args, **kwargs)
+    return decorated
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -542,9 +570,10 @@ HTML_TEMPLATE = """
         .section-title { font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; margin: 30px 0 15px 0; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px; letter-spacing: 0.5px; }
         .section-title:first-child { margin-top: 0; }
         
+        form.inline-form { margin: 0; }
         .btn-group { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; }
         .btn-full { grid-column: span 2; }
-        .btn { display: block; text-decoration: none; text-align: center; padding: 15px; border-radius: 12px; font-weight: bold; color: white; transition: transform 0.1s; border: none; cursor: pointer; font-size: 14px;}
+        .btn { width: 100%; box-sizing: border-box; display: block; text-decoration: none; text-align: center; padding: 15px; border-radius: 12px; font-weight: bold; color: white; transition: transform 0.1s; border: none; cursor: pointer; font-size: 14px;}
         .btn:active { transform: scale(0.98); }
         .btn-update { background-color: #007BFF; } 
         .btn-demo { background-color: #6f42c1; } 
@@ -567,7 +596,6 @@ HTML_TEMPLATE = """
 </head>
 <body>
     <div class="card">
-        <!-- 1. KOPFZEILE -->
         <div class="header">
             <h1>Display-Control</h1>
             <p>{{ conf.get('ROOM_NAME', 'Unbekannt') }} | Raumanzeige</p>
@@ -578,19 +606,26 @@ HTML_TEMPLATE = """
                 <div class="error-msg">Konfigurationsfehler! Die Datei 'config.json' konnte nicht gelesen werden.</div>
             {% endif %}
             
-            <!-- 2. GERÄTESTEUERUNG -->
             <div class="section-title">Gerätesteuerung</div>
             <div class="btn-group">
-                <a href="/update" class="btn btn-update btn-full">Manuelles Update</a>
-                <a href="/toggle" class="btn {% if conf.get('DISPLAY_ACTIVE', True) %}btn-off{% else %}btn-on{% endif %}">
-                    {% if conf.get('DISPLAY_ACTIVE', True) %}Display aus{% else %}Display an{% endif %}
-                </a>
-                <a href="/toggle_touch" class="btn {% if conf.get('TOUCH_ACTIVE', True) %}btn-off{% else %}btn-on{% endif %}">
-                    {% if conf.get('TOUCH_ACTIVE', True) %}Touch aus{% else %}Touch an{% endif %}
-                </a>
+                <!-- Buttons durch sichere POST-Formulare ersetzt (CSRF-Schutz gegen externe Aufrufe) -->
+                <form action="/update" method="POST" class="inline-form btn-full">
+                    <button type="submit" class="btn btn-update">Manuelles Update</button>
+                </form>
+                
+                <form action="/toggle" method="POST" class="inline-form">
+                    <button type="submit" class="btn {% if conf.get('DISPLAY_ACTIVE', True) %}btn-off{% else %}btn-on{% endif %}">
+                        {% if conf.get('DISPLAY_ACTIVE', True) %}Display aus{% else %}Display an{% endif %}
+                    </button>
+                </form>
+                
+                <form action="/toggle_touch" method="POST" class="inline-form">
+                    <button type="submit" class="btn {% if conf.get('TOUCH_ACTIVE', True) %}btn-off{% else %}btn-on{% endif %}">
+                        {% if conf.get('TOUCH_ACTIVE', True) %}Touch aus{% else %}Touch an{% endif %}
+                    </button>
+                </form>
             </div>
             
-            <!-- 3. EINSTELLUNGEN -->
             <div class="section-title">Einstellungen</div>
             <form action="/save" method="POST">
                 <div class="form-group">
@@ -599,12 +634,11 @@ HTML_TEMPLATE = """
                 </div>
                 <div class="form-group">
                     <label>Intervall (Sekunden)</label>
-                    <input type="number" name="AUTO_UPDATE_SECONDS" value="{{ conf.get('AUTO_UPDATE_SECONDS', 900) }}">
+                    <input type="number" name="AUTO_UPDATE_SECONDS" value="{{ conf.get('AUTO_UPDATE_SECONDS', 900) }}" min="60">
                 </div>
                 <button type="submit" class="btn btn-save">Speichern</button>
             </form>
             
-            <!-- 4. STATUS -->
             <div class="section-title">Aktuelle Anzeige ({{ conf.get('ROOM_NAME', '') }})</div>
             <div>
                 {% if data and data is mapping and (data.current or data.next) %}
@@ -645,16 +679,18 @@ HTML_TEMPLATE = """
                     {% endif %}
                     
                 {% else %}
-                    <!-- Aufgeräumter Wochenend-/Feiertags-Bildschirm im Webinterface -->
                     <div class="empty-state" style="font-size: 16px; padding: 30px 20px;">{{ msg }}</div>
                 {% endif %}
             </div>
             
-            <!-- 5. TEST & SIMULATION -->
             <div class="section-title">Test & Simulation</div>
             <div class="btn-group">
-                <a href="/demo" class="btn btn-demo btn-full">Simulierte Daten laden</a>
-                <a href="/test_all" class="btn btn-test btn-full">Display-Testlauf starten (ca. 30 Sek)</a>
+                <form action="/demo" method="POST" class="inline-form btn-full">
+                    <button type="submit" class="btn btn-demo">Simulierte Daten laden</button>
+                </form>
+                <form action="/test_all" method="POST" class="inline-form btn-full">
+                    <button type="submit" class="btn btn-test">Display-Testlauf starten (ca. 30 Sek)</button>
+                </form>
             </div>
             
             <p class="footer">Status: {{ now }}</p>
@@ -665,6 +701,7 @@ HTML_TEMPLATE = """
 """
 
 @app.route('/')
+@requires_auth
 def index():
     """Startseite: Liest die Daten aus dem Cache, blockiert also nicht bei WebUntis-Anfragen."""
     conf = load_config()
@@ -677,19 +714,28 @@ def index():
     )
 
 @app.route('/save', methods=['POST'])
+@requires_auth
 def save():
     """Speichert Raum und Intervall in der Konfiguration ab."""
     conf = load_config()
     if conf:
         conf['ROOM_NAME'] = request.form.get('ROOM_NAME')
-        conf['AUTO_UPDATE_SECONDS'] = int(request.form.get('AUTO_UPDATE_SECONDS'))
+        
+        # Sicherheits-Validierung für Eingabedaten
+        try:
+            val = int(request.form.get('AUTO_UPDATE_SECONDS', 900))
+            conf['AUTO_UPDATE_SECONDS'] = max(60, min(val, 86400)) # Mind. 1 Minute, Max 24 Stunden
+        except ValueError:
+            pass # Alten Wert beibehalten, falls jemand Text eingibt
+            
         save_config(conf)
         global force_update_flag
         force_update_flag = True
         time.sleep(0.5) 
     return redirect('/')
 
-@app.route('/update')
+@app.route('/update', methods=['POST'])
+@requires_auth
 def trigger_update():
     """Erzwingt einen sofortigen Refresh bei WebUntis."""
     global force_update_flag
@@ -697,7 +743,8 @@ def trigger_update():
     time.sleep(0.5)
     return redirect('/')
 
-@app.route('/demo')
+@app.route('/demo', methods=['POST'])
+@requires_auth
 def trigger_demo():
     """Lädt einmalig simulierte Vertretungsdaten auf das Display (für Präsentationen)."""
     global force_update_flag, show_demo_once
@@ -706,14 +753,19 @@ def trigger_demo():
     time.sleep(0.5) 
     return redirect('/')
 
-@app.route('/test_all')
+@app.route('/test_all', methods=['POST'])
+@requires_auth
 def trigger_test_all():
     """Startet den Test-Thread im Hintergrund, damit das Webinterface nicht blockiert."""
-    threading.Thread(target=run_display_test_sequence, daemon=True).start()
-    time.sleep(0.5) # Kurze Pause, damit die "TESTLAUF aktiv..." Meldung direkt auf der Website erscheint
+    global test_mode_active
+    # Verhindert Thread-Spam (DoS-Schutz), falls jemand 100x auf den Button klickt
+    if not test_mode_active:
+        threading.Thread(target=run_display_test_sequence, daemon=True).start()
+        time.sleep(0.5) 
     return redirect('/')
 
-@app.route('/toggle')
+@app.route('/toggle', methods=['POST'])
+@requires_auth
 def toggle_display():
     """Schaltet das Hardware-Display in den Konfigurationseinstellungen an oder aus."""
     conf = load_config()
@@ -725,7 +777,8 @@ def toggle_display():
         time.sleep(0.5)
     return redirect('/')
 
-@app.route('/toggle_touch')
+@app.route('/toggle_touch', methods=['POST'])
+@requires_auth
 def toggle_touch():
     """Aktiviert/Deaktiviert die Touch-Fläche (I2C-Polling)."""
     conf = load_config()
