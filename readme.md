@@ -38,7 +38,7 @@ Das Projekt baut auf einer Reihe von Systempaketen und Python-Bibliotheken auf:
 * [**Pillow**](https://python-pillow.github.io/): Generierung des Bildmaterials und des Layouts für das Display.  
 * [**Flask**](https://flask.palletsprojects.com/) & [**Waitress**](https://docs.pylonsproject.org/projects/waitress/): Bereitstellung des lokalen Web-Interfaces.
 * [**Waveshare e-Paper**](https://github.com/waveshareteam/e-Paper): Die offiziellen Hardware-Treiber (SPI).
-* [**smbus2**](https://pypi.org/project/smbus2/)2: Direkte I2C-Kommunikation mit dem kapazitiven Touch-Controller.
+* [**smbus2**](https://pypi.org/project/smbus2/): Direkte I2C-Kommunikation mit dem kapazitiven Touch-Controller.
 
 ## **🚀 Installation & Einrichtung**
 
