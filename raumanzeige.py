@@ -153,13 +153,26 @@ def parse_lesson(lesson, conf):
     elif isinstance(lessons_conf, dict):
         stunde_name = lessons_conf.get(start_str, "")
 
+    # NEU: Prüfen, ob es sich um eine Klausur/Prüfung handelt
+    is_exam = False
+    # Variante A: Offizielles Prüfungs-Modul oder Typ-Änderung in WebUntis
+    if getattr(lesson, 'type', '') == 'exam' or getattr(lesson, 'lstype', '') == 'ex':
+        is_exam = True
+    
+    # Variante B: Fallback auf Text-Erkennung (wird im Schulalltag am häufigsten genutzt)
+    lstext = getattr(lesson, 'lstext', '').lower()
+    activity_type = getattr(lesson, 'activityType', '').lower()
+    if 'klausur' in lstext or 'prüfung' in lstext or 'klausur' in activity_type or 'prüfung' in activity_type:
+        is_exam = True
+
     return {
         "fach": ", ".join([s.name for s in lesson.subjects]),
         "lehrer": ", ".join([t.name for t in lesson.teachers]),
         "klasse": ", ".join([k.name for k in lesson.klassen]),
         "zeit": f"{start_str} - {lesson.end.strftime('%H:%M')}",
         "stunde": stunde_name,
-        "status_code": getattr(lesson, 'code', None) # Wichtig für Vertretungen/Ausfall
+        "status_code": getattr(lesson, 'code', None), # Wichtig für Vertretungen/Ausfall
+        "is_exam": is_exam  # Gibt das Ergebnis der Prüfungserkennung weiter
     }
 
 def get_current_lesson(conf):
@@ -275,20 +288,30 @@ def draw_lesson_block(draw, lesson_data, y_offset, label_text, f_small, f_reg, f
     draw.text((5, y_offset), header_text, font=f_small, fill=0)
     
     status = lesson_data.get('status_code')
+    is_exam = lesson_data.get('is_exam', False)
     y_content = y_offset + 16
     
-    # Ausfall (Invertierter Block)
+    # Priorität 1: Ausfall (Invertierter Block)
     if status == 'cancelled':
         draw.rectangle((5, y_content, 85, y_content + 18), fill=0)
         draw.text((8, y_content+2), "FÄLLT AUS", font=f_small, fill=255)
         draw.text((90, y_content), f"{lesson_data['klasse']}", font=f_reg, fill=0)
-    # Vertretung (Invertiertes Label)
+    
+    # Priorität 2: Klausur/Prüfung (Invertierter Block)
+    elif is_exam:
+        draw.rectangle((5, y_content, 75, y_content + 18), fill=0)
+        draw.text((8, y_content+2), "PRÜFUNG", font=f_small, fill=255)
+        main_info = f"{lesson_data['fach']} | {lesson_data['klasse']} ({lesson_data['lehrer']})"
+        draw.text((80, y_content), main_info, font=f_reg, fill=0)
+        
+    # Priorität 3: Vertretung (Invertiertes Label)
     elif status == 'irregular':
         draw.rectangle((5, y_content, 90, y_content + 18), fill=0)
         draw.text((8, y_content+2), "VERTRETUNG", font=f_small, fill=255)
         main_info = f"{lesson_data['fach']} | {lesson_data['klasse']} ({lesson_data['lehrer']})"
         draw.text((95, y_content), main_info, font=f_reg, fill=0)
-    # Normaler Unterricht
+        
+    # Priorität 4: Normaler Unterricht
     else:
         main_info = f"{lesson_data['fach']} | {lesson_data['klasse']} ({lesson_data['lehrer']})"
         draw.text((5, y_content), main_info, font=f_reg, fill=0)
@@ -373,13 +396,19 @@ def run_display_test_sequence():
     test_mode_active = True
     conf = load_config()
     
-    # 8 verschiedene Test-Szenarien für den UI-Test (mit anonymisierten Dummy-Daten)
+    # Verschiedene Test-Szenarien für den UI-Test (mit anonymisierten Dummy-Daten inkl. Prüfung)
     test_cases = [
-        ( {"current": {"fach": "Geschichte", "lehrer": "Ab", "klasse": "9B", "zeit": "08:00 - 08:45", "stunde": "1. Std.", "status_code": None},
-           "next": {"fach": "Informatik", "lehrer": "Cd", "klasse": "11B", "zeit": "08:50 - 09:35", "stunde": "2. Std.", "status_code": None}}, "" ),
-        ( {"current": {"fach": "Religion", "lehrer": "Ef", "klasse": "7A", "zeit": "09:55 - 10:40", "stunde": "3. Std.", "status_code": "cancelled"},
-           "next": {"fach": "Geschichte", "lehrer": "Ef", "klasse": "12", "zeit": "10:45 - 11:30", "stunde": "4. Std.", "status_code": None}}, "" ),
-        ( {"current": {"fach": "Werte u. Normen", "lehrer": "Gk", "klasse": "8C", "zeit": "11:45 - 12:30", "stunde": "5. Std.", "status_code": "irregular"},
+        ( {"current": {"fach": "Geschichte", "lehrer": "Ab", "klasse": "9B", "zeit": "08:00 - 08:45", "stunde": "1. Std.", "status_code": None, "is_exam": False},
+           "next": {"fach": "Informatik", "lehrer": "Cd", "klasse": "11B", "zeit": "08:50 - 09:35", "stunde": "2. Std.", "status_code": None, "is_exam": False}}, "" ),
+        
+        # Das neue Prüfungs-Szenario
+        ( {"current": {"fach": "Informatik", "lehrer": "Ab", "klasse": "11B", "zeit": "09:55 - 11:30", "stunde": "3.-4. Std.", "status_code": None, "is_exam": True},
+           "next": {"fach": "Religion", "lehrer": "Ef", "klasse": "10A", "zeit": "11:45 - 12:30", "stunde": "5. Std.", "status_code": None, "is_exam": False}}, "" ),
+        
+        ( {"current": {"fach": "Religion", "lehrer": "Ef", "klasse": "7A", "zeit": "09:55 - 10:40", "stunde": "3. Std.", "status_code": "cancelled", "is_exam": False},
+           "next": {"fach": "Geschichte", "lehrer": "Ef", "klasse": "12", "zeit": "10:45 - 11:30", "stunde": "4. Std.", "status_code": None, "is_exam": False}}, "" ),
+        
+        ( {"current": {"fach": "Werte u. Normen", "lehrer": "Gk", "klasse": "8C", "zeit": "11:45 - 12:30", "stunde": "5. Std.", "status_code": "irregular", "is_exam": False},
            "next": None}, "" ),
         ( None, "Schönes Wochenende!" ),
         ( None, "Unterrichtsfrei" ),
@@ -488,8 +517,8 @@ def background_loop():
                 # Demo-Modus für Präsentationen (simulierte, anonyme Daten)
                 if show_demo_once:
                     data = {
-                        "current": {"fach": "Informatik", "lehrer": "Ab", "klasse": "11B", "zeit": "09:55 - 10:40", "stunde": "3. Std.", "status_code": "irregular"},
-                        "next": {"fach": "Geschichte", "lehrer": "Cd", "klasse": "9B", "zeit": "10:45 - 11:30", "stunde": "4. Std.", "status_code": None}
+                        "current": {"fach": "Informatik", "lehrer": "Ab", "klasse": "11B", "zeit": "09:55 - 10:40", "stunde": "3. Std.", "status_code": "irregular", "is_exam": False},
+                        "next": {"fach": "Geschichte", "lehrer": "Cd", "klasse": "9B", "zeit": "10:45 - 11:30", "stunde": "4. Std.", "status_code": None, "is_exam": False}
                     }
                     err = ""
                     show_demo_once = False
@@ -590,8 +619,11 @@ HTML_TEMPLATE = """
         .empty-state { text-align: center; color: #94a3b8; font-size: 13px; padding: 20px; background: #f8fafc; border-radius: 10px; margin-top: 10px; font-weight: bold; }
         .error-msg { background-color: #fee2e2; color: #dc2626; padding: 15px; border-radius: 10px; font-size: 13px; font-weight: bold; text-align: center; margin-bottom: 20px; }
         .footer { text-align: center; font-size: 10px; color: #cbd5e1; margin-top: 35px; text-transform: uppercase; letter-spacing: 1px; }
+        
+        /* Farbige Status-Tags im Webinterface */
         .tag-red { background-color: #fee2e2; color: #dc2626; padding: 4px 8px; border-radius: 5px; font-size: 11px; font-weight: bold; text-transform: uppercase; margin-bottom: 6px; display: inline-block;}
         .tag-yellow { background-color: #fef08a; color: #854d0e; padding: 4px 8px; border-radius: 5px; font-size: 11px; font-weight: bold; text-transform: uppercase; margin-bottom: 6px; display: inline-block;}
+        .tag-purple { background-color: #f3e8ff; color: #7e22ce; padding: 4px 8px; border-radius: 5px; font-size: 11px; font-weight: bold; text-transform: uppercase; margin-bottom: 6px; display: inline-block;}
     </style>
 </head>
 <body>
@@ -649,8 +681,11 @@ HTML_TEMPLATE = """
                                 <strong style="color: #0f172a; font-size: 14px;">{{ data.current.stunde }}</strong>
                                 <span style="color: #64748b; font-size: 12px; font-weight: bold;">{{ data.current.zeit }}</span>
                             </div>
+                            <!-- Status-Auswertung für "JETZT" (inklusive neuer Prüfungserkennung) -->
                             {% if data.current.status_code == 'cancelled' %}<div class="tag-red">Fällt aus</div>
+                            {% elif data.current.is_exam %}<div class="tag-purple">Prüfung</div>
                             {% elif data.current.status_code == 'irregular' %}<div class="tag-yellow">Vertretung</div>{% endif %}
+                            
                             <div style="font-size: 16px; font-weight: 800; color: #1e293b; margin-bottom: 4px;">
                                 {{ data.current.fach }} <span style="color: #cbd5e1; margin: 0 4px;">|</span> {{ data.current.klasse }}
                             </div>
@@ -667,8 +702,11 @@ HTML_TEMPLATE = """
                                 <strong style="color: #0f172a; font-size: 14px;">{{ data.next.stunde }}</strong>
                                 <span style="color: #64748b; font-size: 12px; font-weight: bold;">{{ data.next.zeit }}</span>
                             </div>
+                            <!-- Status-Auswertung für "DANACH" (inklusive neuer Prüfungserkennung) -->
                             {% if data.next.status_code == 'cancelled' %}<div class="tag-red">Fällt aus</div>
+                            {% elif data.next.is_exam %}<div class="tag-purple">Prüfung</div>
                             {% elif data.next.status_code == 'irregular' %}<div class="tag-yellow">Vertretung</div>{% endif %}
+                            
                             <div style="font-size: 16px; font-weight: 800; color: #1e293b; margin-bottom: 4px;">
                                 {{ data.next.fach }} <span style="color: #cbd5e1; margin: 0 4px;">|</span> {{ data.next.klasse }}
                             </div>
