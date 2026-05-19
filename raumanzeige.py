@@ -57,6 +57,9 @@ test_mode_active = False             # Blockiert reguläre Updates, während die
 shutdown_event = threading.Event()   # Erlaubt das saubere Beenden des Hintergrund-Threads
 display_lock = threading.Lock()      # Verhindert, dass Display und Webserver gleichzeitig auf SPI zugreifen
 
+# NEU: Globale Variable für die Zeit-Simulation (Testzwecke im Webinterface)
+simulated_datetime = None
+
 # Globaler Cache für das Web-Interface (spart ständige, langsame API-Abfragen)
 current_display_data = None
 current_display_msg = "Warte auf erstes Update..."
@@ -88,6 +91,17 @@ def save_config(config):
         os.replace(temp_path, CONFIG_FILE)
     except Exception as e:
         print(f"FEHLER beim Speichern der config.json: {e}")
+
+
+# ==============================================================================
+# 3.5 ZENTRALE UHR (Ermöglicht Zeitsimulation)
+# ==============================================================================
+def get_now():
+    """Gibt die aktuelle Zeit zurück ODER die simulierte Zeit für Testzwecke."""
+    global simulated_datetime
+    if simulated_datetime:
+        return simulated_datetime
+    return datetime.datetime.now()
 
 
 # ==============================================================================
@@ -154,7 +168,7 @@ def parse_lesson(lesson, conf):
         stunde_name = lessons_conf.get(start_str, "")
 
     # =====================================================================
-    # NEU: "Bulletproof" Prüfungserkennung (Die Holzhammer-Methode)
+    # "Bulletproof" Prüfungserkennung (Die Holzhammer-Methode)
     # =====================================================================
     is_exam = False
     text_pool = ""
@@ -165,7 +179,7 @@ def parse_lesson(lesson, conf):
         if val in ['ex', 'exam']:
             is_exam = True
             
-    # 2. Alle erdenklichen Textfelder nach Stichworten durchsuchen
+    # 2. Alle erdenklichen Textfelder (inklusive "Information zur Stunde") sammeln
     for attr in ['lstext', 'info', 'substText', 'activityType', 'statflags']:
         val = getattr(lesson, attr, '')
         if val: text_pool += " " + str(val).lower()
@@ -175,15 +189,32 @@ def parse_lesson(lesson, conf):
         text_pool += " " + str(s.name).lower() + " " + str(getattr(s, 'long_name', '')).lower()
         
     # 4. Hardcore-Fallback: Komplette Rohdaten der API durchsuchen 
-    # (Fängt alles ab, was die python-webuntis Bibliothek eventuell versteckt)
     if hasattr(lesson, '_data'): 
         text_pool += " " + str(lesson._data).lower()
         
+    # HIER IST DIE ÄNDERUNG: Alle erdenklichen Prüfungs-Schlagworte
+    suchbegriffe = ['klausur', 'klassenarbeit', 'klassenarbeiten', 'prüfung', 'pruefung', 'exam', 'schulaufgabe']
+    
     # Wenn irgendwo in diesem riesigen Datenpool ein Treffer ist -> Prüfung!
-    if any(keyword in text_pool for keyword in ['klausur', 'prüfung', 'pruefung', 'exam', 'schulaufgabe']):
+    if any(keyword in text_pool for keyword in suchbegriffe):
         is_exam = True
+        
     # =====================================================================
-
+    # Verbesserte Logik für die Infos zur Stunde
+    # =====================================================================
+    info_parts = []
+    # Wir schauen in alle relevanten Felder, um bei Prüfungen keine leeren Infos zu haben
+    for attr in ['info', 'lstext', 'substText']:
+        val = getattr(lesson, attr, '')
+        if val and str(val).strip() and str(val).strip() not in info_parts:
+            info_parts.append(str(val).strip())
+    
+    stunden_info = " | ".join(info_parts)
+    
+    # Fallback für Prüfungen, falls gar kein Text vorhanden ist
+    if not stunden_info and is_exam:
+        stunden_info = "Prüfung / Klassenarbeit"
+        
     return {
         "fach": ", ".join([s.name for s in lesson.subjects]),
         "lehrer": ", ".join([t.name for t in lesson.teachers]),
@@ -191,7 +222,8 @@ def parse_lesson(lesson, conf):
         "zeit": f"{start_str} - {lesson.end.strftime('%H:%M')}",
         "stunde": stunde_name,
         "status_code": getattr(lesson, 'code', None), # Wichtig für Vertretungen/Ausfall
-        "is_exam": is_exam  # Gibt das Ergebnis der Prüfungserkennung weiter
+        "is_exam": is_exam,  # Gibt das Ergebnis der Prüfungserkennung weiter
+        "stunden_info": stunden_info # Wird auf der Webseite als Info-Box angezeigt
     }
 
 def get_current_lesson(conf):
@@ -219,8 +251,9 @@ def get_current_lesson(conf):
         if not rooms:
             return None, f"Raum {conf.get('ROOM_NAME', 'Unbekannt')} fehlt."
         
-        today = datetime.date.today()
-        now = datetime.datetime.now()
+        # WICHTIG: Hier greift unsere neue "Zentrale Uhr" für die Simulation!
+        now = get_now()
+        today = now.date()
         now_time = now.time()
         
         # Wochenende abfangen
@@ -358,7 +391,8 @@ def update_display_logic(data, message, conf):
                 # Fallback auf Bitmap, falls TrueType nicht gefunden wird
                 f_mega = f_huge = f_large = f_med = f_reg = f_small = ImageFont.load_default()
 
-            now = datetime.datetime.now()
+            # Auch hier unsere "Zentrale Uhr" verwenden
+            now = get_now()
             
             # KOPFZEILE: Invertierter Balken mit Raumname und aktueller Uhrzeit
             draw.rectangle((0, 0, 250, 24), fill=0)
@@ -415,19 +449,19 @@ def run_display_test_sequence():
     test_mode_active = True
     conf = load_config()
     
-    # Verschiedene Test-Szenarien für den UI-Test (mit anonymisierten Dummy-Daten inkl. Prüfung)
+    # Verschiedene Test-Szenarien für den UI-Test
     test_cases = [
-        ( {"current": {"fach": "Geschichte", "lehrer": "Ab", "klasse": "9B", "zeit": "08:00 - 08:45", "stunde": "1. Std.", "status_code": None, "is_exam": False},
-           "next": {"fach": "Informatik", "lehrer": "Cd", "klasse": "11B", "zeit": "08:50 - 09:35", "stunde": "2. Std.", "status_code": None, "is_exam": False}}, "" ),
+        ( {"current": {"fach": "Geschichte", "lehrer": "Ab", "klasse": "9B", "zeit": "08:00 - 08:45", "stunde": "1. Std.", "status_code": None, "is_exam": False, "stunden_info": "Buch auf Seite 12 aufschlagen"},
+           "next": {"fach": "Informatik", "lehrer": "Cd", "klasse": "11B", "zeit": "08:50 - 09:35", "stunde": "2. Std.", "status_code": None, "is_exam": False, "stunden_info": ""}}, "" ),
         
-        # Das neue Prüfungs-Szenario
-        ( {"current": {"fach": "Informatik", "lehrer": "Ab", "klasse": "11B", "zeit": "09:55 - 11:30", "stunde": "3.-4. Std.", "status_code": None, "is_exam": True},
-           "next": {"fach": "Religion", "lehrer": "Ef", "klasse": "10A", "zeit": "11:45 - 12:30", "stunde": "5. Std.", "status_code": None, "is_exam": False}}, "" ),
+        # Das Prüfungs-Szenario
+        ( {"current": {"fach": "Informatik", "lehrer": "Ab", "klasse": "11B", "zeit": "09:55 - 11:30", "stunde": "3.-4. Std.", "status_code": None, "is_exam": True, "stunden_info": "Klassenarbeit Nr. 2"},
+           "next": {"fach": "Religion", "lehrer": "Ef", "klasse": "10A", "zeit": "11:45 - 12:30", "stunde": "5. Std.", "status_code": None, "is_exam": False, "stunden_info": ""}}, "" ),
         
-        ( {"current": {"fach": "Religion", "lehrer": "Ef", "klasse": "7A", "zeit": "09:55 - 10:40", "stunde": "3. Std.", "status_code": "cancelled", "is_exam": False},
-           "next": {"fach": "Geschichte", "lehrer": "Ef", "klasse": "12", "zeit": "10:45 - 11:30", "stunde": "4. Std.", "status_code": None, "is_exam": False}}, "" ),
+        ( {"current": {"fach": "Religion", "lehrer": "Ef", "klasse": "7A", "zeit": "09:55 - 10:40", "stunde": "3. Std.", "status_code": "cancelled", "is_exam": False, "stunden_info": "Aufgaben in IServ bearbeiten"},
+           "next": {"fach": "Geschichte", "lehrer": "Ef", "klasse": "12", "zeit": "10:45 - 11:30", "stunde": "4. Std.", "status_code": None, "is_exam": False, "stunden_info": ""}}, "" ),
         
-        ( {"current": {"fach": "Werte u. Normen", "lehrer": "Gk", "klasse": "8C", "zeit": "11:45 - 12:30", "stunde": "5. Std.", "status_code": "irregular", "is_exam": False},
+        ( {"current": {"fach": "Werte u. Normen", "lehrer": "Gk", "klasse": "8C", "zeit": "11:45 - 12:30", "stunde": "5. Std.", "status_code": "irregular", "is_exam": False, "stunden_info": "Achtung: Raumänderung"},
            "next": None}, "" ),
         ( None, "Schönes Wochenende!" ),
         ( None, "Unterrichtsfrei" ),
@@ -445,7 +479,7 @@ def run_display_test_sequence():
         # Das generierte Bild auf das Hardware-Display pushen
         update_display_logic(data, msg, conf)
         
-        # 4 Sekunden warten (Genug Zeit, damit das E-Paper lädt und der User es betrachten kann)
+        # 4 Sekunden warten
         time.sleep(4)
         
     # Test beendet, Normalbetrieb wieder aufnehmen und sofortiges Update erzwingen
@@ -461,7 +495,6 @@ def background_loop():
     last_static_date = None
 
     while not shutdown_event.is_set():
-        # Solange die UI-Test-Routine läuft, macht der reguläre Haupt-Loop Pause
         if test_mode_active:
             shutdown_event.wait(1)
             continue
@@ -497,12 +530,13 @@ def background_loop():
         
         update_times = list(dyn_update_times)
 
-        now_time = time.time()
-        current_dt = datetime.datetime.now()
+        # Die Systemzeit (für Intervalle) und die simulierte Zeit (für WebUntis) trennen
+        now_time_system = time.time() 
+        current_dt = get_now()
         current_hm = current_dt.strftime("%H:%M")
         current_time_obj = current_dt.time()
         
-        # 2. Prüfen, ob wir uns in der relevanten Schulzeit befinden (1 Std. vorher bis 1 Std. nachher)
+        # 2. Prüfen, ob wir uns in der relevanten Schulzeit befinden
         try:
             ds_h, ds_m = map(int, schedule.get("DAY_START", "07:55").split(":"))
             de_h, de_m = map(int, schedule.get("DAY_END", "15:30").split(":"))
@@ -516,14 +550,14 @@ def background_loop():
         is_exact_time = (current_hm in update_times) and (last_minute_triggered != current_hm)
         
         # Intervall-Updates nur ausführen, wenn wir uns in den aktiven Stunden befinden
-        is_interval_reached = (now_time - last_update >= conf.get('AUTO_UPDATE_SECONDS', 900)) and is_active_hours
+        is_interval_reached = (now_time_system - last_update >= conf.get('AUTO_UPDATE_SECONDS', 900)) and is_active_hours
 
         # 4. Wurde das Display berührt?
         if conf.get('TOUCH_ACTIVE', True) and check_touch_via_i2c():
-            if now_time - last_touch_time > 5.0: # 5 Sekunden Cooldown
+            if now_time_system - last_touch_time > 5.0: # 5 Sekunden Cooldown
                 print(f"\n[TOUCH {datetime.datetime.now().strftime('%H:%M:%S')}] Display beruehrt! Update wird vorbereitet...")
                 force_update_flag = True
-            last_touch_time = now_time
+            last_touch_time = now_time_system
 
         # 5. Daten holen und Update ausführen
         if force_update_flag or is_interval_reached or is_exact_time:
@@ -533,26 +567,22 @@ def background_loop():
             force_update_flag = False
             
             if conf.get('DISPLAY_ACTIVE', True):
-                # Demo-Modus für Präsentationen (simulierte, anonyme Daten)
                 if show_demo_once:
                     data = {
-                        "current": {"fach": "Informatik", "lehrer": "Ab", "klasse": "11B", "zeit": "09:55 - 10:40", "stunde": "3. Std.", "status_code": "irregular", "is_exam": False},
-                        "next": {"fach": "Geschichte", "lehrer": "Cd", "klasse": "9B", "zeit": "10:45 - 11:30", "stunde": "4. Std.", "status_code": None, "is_exam": False}
+                        "current": {"fach": "Informatik", "lehrer": "Ab", "klasse": "11B", "zeit": "09:55 - 10:40", "stunde": "3. Std.", "status_code": "irregular", "is_exam": False, "stunden_info": "Theorieunterricht - Netzwerktechnik"},
+                        "next": {"fach": "Geschichte", "lehrer": "Cd", "klasse": "9B", "zeit": "10:45 - 11:30", "stunde": "4. Std.", "status_code": None, "is_exam": False, "stunden_info": ""}
                     }
                     err = ""
                     show_demo_once = False
                 else:
-                    # Echtdaten von WebUntis abfragen
                     data, err = get_current_lesson(conf)
                 
-                # Daten in den globalen Cache für das Webinterface schreiben
                 current_display_data = data
                 current_display_msg = err
 
-                current_date = datetime.date.today().strftime("%Y-%m-%d")
+                current_date = current_dt.strftime("%Y-%m-%d")
                 is_static_day = err in ["Schönes Wochenende!", "Unterrichtsfrei"]
                 
-                # Hardware schonen: An freien Tagen nur noch bei manuellem Trigger aktualisieren
                 skip_update = False
                 if is_static_day and not is_manual:
                     if last_static_date == current_date: skip_update = True
@@ -566,7 +596,6 @@ def background_loop():
                 
             last_update = time.time()
             time.sleep(1.5)
-            # Touch-Chip zurücksetzen nach dem Update
             clear_touch_interrupt_via_i2c()
             last_touch_time = time.time()
             
@@ -579,7 +608,6 @@ def background_loop():
 def check_auth(username, password):
     """Prüft Username und Passwort gegen die config.json"""
     conf = load_config()
-    # Lade die Zugangsdaten aus der Config, nutze "admin" / "tuerschild" als Rückfall
     u = conf.get('ADMIN_USER', 'admin')
     p = conf.get('ADMIN_PASS', 'tuerschild')
     return username == u and password == p
@@ -639,7 +667,6 @@ HTML_TEMPLATE = """
         .error-msg { background-color: #fee2e2; color: #dc2626; padding: 15px; border-radius: 10px; font-size: 13px; font-weight: bold; text-align: center; margin-bottom: 20px; }
         .footer { text-align: center; font-size: 10px; color: #cbd5e1; margin-top: 35px; text-transform: uppercase; letter-spacing: 1px; }
         
-        /* Farbige Status-Tags im Webinterface */
         .tag-red { background-color: #fee2e2; color: #dc2626; padding: 4px 8px; border-radius: 5px; font-size: 11px; font-weight: bold; text-transform: uppercase; margin-bottom: 6px; display: inline-block;}
         .tag-yellow { background-color: #fef08a; color: #854d0e; padding: 4px 8px; border-radius: 5px; font-size: 11px; font-weight: bold; text-transform: uppercase; margin-bottom: 6px; display: inline-block;}
         .tag-purple { background-color: #f3e8ff; color: #7e22ce; padding: 4px 8px; border-radius: 5px; font-size: 11px; font-weight: bold; text-transform: uppercase; margin-bottom: 6px; display: inline-block;}
@@ -659,7 +686,6 @@ HTML_TEMPLATE = """
             
             <div class="section-title">Gerätesteuerung</div>
             <div class="btn-group">
-                <!-- Buttons durch sichere POST-Formulare ersetzt (CSRF-Schutz gegen externe Aufrufe) -->
                 <form action="/update" method="POST" class="inline-form btn-full">
                     <button type="submit" class="btn btn-update">Manuelles Update</button>
                 </form>
@@ -700,7 +726,6 @@ HTML_TEMPLATE = """
                                 <strong style="color: #0f172a; font-size: 14px;">{{ data.current.stunde }}</strong>
                                 <span style="color: #64748b; font-size: 12px; font-weight: bold;">{{ data.current.zeit }}</span>
                             </div>
-                            <!-- Status-Auswertung für "JETZT" (inklusive neuer Prüfungserkennung) -->
                             {% if data.current.status_code == 'cancelled' %}<div class="tag-red">Fällt aus</div>
                             {% elif data.current.is_exam %}<div class="tag-purple">Prüfung</div>
                             {% elif data.current.status_code == 'irregular' %}<div class="tag-yellow">Vertretung</div>{% endif %}
@@ -709,6 +734,12 @@ HTML_TEMPLATE = """
                                 {{ data.current.fach }} <span style="color: #cbd5e1; margin: 0 4px;">|</span> {{ data.current.klasse }}
                             </div>
                             <div style="font-size: 12px; color: #475569; font-weight: 600;">Lehrkraft: {{ data.current.lehrer }}</div>
+                            
+                            {% if data.current.stunden_info %}
+                            <div style="margin-top: 8px; padding: 6px 10px; background-color: #e2e8f0; border-radius: 6px; font-size: 11px; color: #334155; border-left: 3px solid #94a3b8;">
+                                <strong>Info:</strong> {{ data.current.stunden_info }}
+                            </div>
+                            {% endif %}
                         </div>
                     {% else %}
                         <div class="empty-state">{{ msg }}</div>
@@ -721,7 +752,6 @@ HTML_TEMPLATE = """
                                 <strong style="color: #0f172a; font-size: 14px;">{{ data.next.stunde }}</strong>
                                 <span style="color: #64748b; font-size: 12px; font-weight: bold;">{{ data.next.zeit }}</span>
                             </div>
-                            <!-- Status-Auswertung für "DANACH" (inklusive neuer Prüfungserkennung) -->
                             {% if data.next.status_code == 'cancelled' %}<div class="tag-red">Fällt aus</div>
                             {% elif data.next.is_exam %}<div class="tag-purple">Prüfung</div>
                             {% elif data.next.status_code == 'irregular' %}<div class="tag-yellow">Vertretung</div>{% endif %}
@@ -730,6 +760,12 @@ HTML_TEMPLATE = """
                                 {{ data.next.fach }} <span style="color: #cbd5e1; margin: 0 4px;">|</span> {{ data.next.klasse }}
                             </div>
                             <div style="font-size: 12px; color: #475569; font-weight: 600;">Lehrkraft: {{ data.next.lehrer }}</div>
+                            
+                            {% if data.next.stunden_info %}
+                            <div style="margin-top: 8px; padding: 6px 10px; background-color: #e2e8f0; border-radius: 6px; font-size: 11px; color: #334155; border-left: 3px solid #94a3b8;">
+                                <strong>Info:</strong> {{ data.next.stunden_info }}
+                            </div>
+                            {% endif %}
                         </div>
                     {% else %}
                         <div class="empty-state">Kein Unterricht mehr.</div>
@@ -741,16 +777,28 @@ HTML_TEMPLATE = """
             </div>
             
             <div class="section-title">Test & Simulation</div>
-            <div class="btn-group">
-                <form action="/demo" method="POST" class="inline-form btn-full">
-                    <button type="submit" class="btn btn-demo">Simulierte Daten laden</button>
+            
+            <div style="background: #f8fafc; border-radius: 10px; padding: 15px; margin-bottom: 15px; border: 1px solid #e2e8f0;">
+                <label>Datum & Uhrzeit simulieren</label>
+                <form action="/simulate_time" method="POST" style="margin-bottom: 10px;">
+                    <input type="datetime-local" name="SIM_TIME" required style="margin-bottom: 10px;">
+                    <button type="submit" class="btn btn-test">Zeit simulieren</button>
                 </form>
-                <form action="/test_all" method="POST" class="inline-form btn-full">
-                    <button type="submit" class="btn btn-test">Display-Testlauf starten (ca. 30 Sek)</button>
+                <form action="/reset_time" method="POST" class="inline-form">
+                    <button type="submit" class="btn btn-update">Zurück zur Echtzeit</button>
                 </form>
             </div>
             
-            <p class="footer">Status: {{ now }}</p>
+            <div class="btn-group">
+                <form action="/demo" method="POST" class="inline-form btn-full">
+                    <button type="submit" class="btn btn-demo">Lokale Dummy-Daten laden</button>
+                </form>
+                <form action="/test_all" method="POST" class="inline-form btn-full">
+                    <button type="submit" class="btn btn-test" style="background-color: #0f172a;">Display-Testlauf (ca. 30 Sek)</button>
+                </form>
+            </div>
+            
+            <p class="footer">Status: {{ now }}{% if sim_active %} <br><strong style="color: #dc2626;">(ZEIT WIRD SIMULIERT)</strong>{% endif %}</p>
         </div>
     </div>
 </body>
@@ -760,31 +808,54 @@ HTML_TEMPLATE = """
 @app.route('/')
 @requires_auth
 def index():
-    """Startseite: Liest die Daten aus dem Cache, blockiert also nicht bei WebUntis-Anfragen."""
     conf = load_config()
+    global simulated_datetime
+    is_simulated = simulated_datetime is not None
+    display_time = get_now().strftime("%d.%m.%Y %H:%M:%S")
+
     return render_template_string(
         HTML_TEMPLATE, 
         conf=conf, 
         data=current_display_data, 
         msg=current_display_msg, 
-        now=datetime.datetime.now().strftime("%H:%M:%S")
+        now=display_time,
+        sim_active=is_simulated
     )
+
+@app.route('/simulate_time', methods=['POST'])
+@requires_auth
+def simulate_time():
+    global simulated_datetime, force_update_flag
+    sim_time_str = request.form.get('SIM_TIME')
+    if sim_time_str:
+        try:
+            simulated_datetime = datetime.datetime.strptime(sim_time_str, "%Y-%m-%dT%H:%M")
+            force_update_flag = True
+            time.sleep(0.5)
+        except Exception as e:
+            print(f"Fehler beim Parsen der Simulationszeit: {e}")
+    return redirect('/')
+
+@app.route('/reset_time', methods=['POST'])
+@requires_auth
+def reset_time():
+    global simulated_datetime, force_update_flag
+    simulated_datetime = None
+    force_update_flag = True
+    time.sleep(0.5)
+    return redirect('/')
 
 @app.route('/save', methods=['POST'])
 @requires_auth
 def save():
-    """Speichert Raum und Intervall in der Konfiguration ab."""
     conf = load_config()
     if conf:
         conf['ROOM_NAME'] = request.form.get('ROOM_NAME')
-        
-        # Sicherheits-Validierung für Eingabedaten
         try:
             val = int(request.form.get('AUTO_UPDATE_SECONDS', 900))
-            conf['AUTO_UPDATE_SECONDS'] = max(60, min(val, 86400)) # Mind. 1 Minute, Max 24 Stunden
+            conf['AUTO_UPDATE_SECONDS'] = max(60, min(val, 86400))
         except ValueError:
-            pass # Alten Wert beibehalten, falls jemand Text eingibt
-            
+            pass
         save_config(conf)
         global force_update_flag
         force_update_flag = True
@@ -794,7 +865,6 @@ def save():
 @app.route('/update', methods=['POST'])
 @requires_auth
 def trigger_update():
-    """Erzwingt einen sofortigen Refresh bei WebUntis."""
     global force_update_flag
     force_update_flag = True
     time.sleep(0.5)
@@ -803,7 +873,6 @@ def trigger_update():
 @app.route('/demo', methods=['POST'])
 @requires_auth
 def trigger_demo():
-    """Lädt einmalig simulierte Vertretungsdaten auf das Display (für Präsentationen)."""
     global force_update_flag, show_demo_once
     show_demo_once = True
     force_update_flag = True
@@ -813,9 +882,7 @@ def trigger_demo():
 @app.route('/test_all', methods=['POST'])
 @requires_auth
 def trigger_test_all():
-    """Startet den Test-Thread im Hintergrund, damit das Webinterface nicht blockiert."""
     global test_mode_active
-    # Verhindert Thread-Spam (DoS-Schutz), falls jemand 100x auf den Button klickt
     if not test_mode_active:
         threading.Thread(target=run_display_test_sequence, daemon=True).start()
         time.sleep(0.5) 
@@ -824,7 +891,6 @@ def trigger_test_all():
 @app.route('/toggle', methods=['POST'])
 @requires_auth
 def toggle_display():
-    """Schaltet das Hardware-Display in den Konfigurationseinstellungen an oder aus."""
     conf = load_config()
     if conf:
         conf['DISPLAY_ACTIVE'] = not conf.get('DISPLAY_ACTIVE', True)
@@ -837,7 +903,6 @@ def toggle_display():
 @app.route('/toggle_touch', methods=['POST'])
 @requires_auth
 def toggle_touch():
-    """Aktiviert/Deaktiviert die Touch-Fläche (I2C-Polling)."""
     conf = load_config()
     if conf:
         conf['TOUCH_ACTIVE'] = not conf.get('TOUCH_ACTIVE', True)
@@ -853,7 +918,6 @@ def toggle_touch():
 # ==============================================================================
 if __name__ == '__main__':
     try:
-        # Hardware-Reset des Touch-Chips einmalig beim Start durchführen
         if GPIO:
             try:
                 GPIO.setmode(GPIO.BCM)
@@ -867,20 +931,14 @@ if __name__ == '__main__':
             except Exception as e:
                 print(f"GPIO Setup Fehler: {e}")
 
-        # Den eigentlichen "Motor" des Programms als Hintergrundprozess starten
         threading.Thread(target=background_loop, daemon=True).start()
             
         print(f" * Admin-Interface (Localhost): http://127.0.0.1:5000")
-        
-        # Den lokalen Webserver über Waitress starten 
-        # (Wird nach außen durch Nginx per HTTPS geschützt)
         serve(app, host='127.0.0.1', port=5000)
         
     except KeyboardInterrupt:
-        # Bei Abbruch (Strg+C) durch den Benutzer den Hintergrund-Thread sauber anhalten
         shutdown_event.set()
     finally:
-        # Ressourcen freigeben und Display löschen
         shutdown_event.set()
         if GPIO: GPIO.cleanup()
         with display_lock:
