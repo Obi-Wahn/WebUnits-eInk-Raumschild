@@ -153,17 +153,36 @@ def parse_lesson(lesson, conf):
     elif isinstance(lessons_conf, dict):
         stunde_name = lessons_conf.get(start_str, "")
 
-    # NEU: Prüfen, ob es sich um eine Klausur/Prüfung handelt
+    # =====================================================================
+    # NEU: "Bulletproof" Prüfungserkennung (Die Holzhammer-Methode)
+    # =====================================================================
     is_exam = False
-    # Variante A: Offizielles Prüfungs-Modul oder Typ-Änderung in WebUntis
-    if getattr(lesson, 'type', '') == 'exam' or getattr(lesson, 'lstype', '') == 'ex':
-        is_exam = True
+    text_pool = ""
     
-    # Variante B: Fallback auf Text-Erkennung (wird im Schulalltag am häufigsten genutzt)
-    lstext = getattr(lesson, 'lstext', '').lower()
-    activity_type = getattr(lesson, 'activityType', '').lower()
-    if 'klausur' in lstext or 'prüfung' in lstext or 'klausur' in activity_type or 'prüfung' in activity_type:
+    # 1. Offizielle WebUntis-Attribute abfragen ('ex' = Exam)
+    for attr in ['type', 'lstype', 'code']:
+        val = str(getattr(lesson, attr, '')).lower()
+        if val in ['ex', 'exam']:
+            is_exam = True
+            
+    # 2. Alle erdenklichen Textfelder nach Stichworten durchsuchen
+    for attr in ['lstext', 'info', 'substText', 'activityType', 'statflags']:
+        val = getattr(lesson, attr, '')
+        if val: text_pool += " " + str(val).lower()
+        
+    # 3. Fächernamen prüfen (oft wird "Klausur" einfach als Fach eingetragen)
+    for s in lesson.subjects:
+        text_pool += " " + str(s.name).lower() + " " + str(getattr(s, 'long_name', '')).lower()
+        
+    # 4. Hardcore-Fallback: Komplette Rohdaten der API durchsuchen 
+    # (Fängt alles ab, was die python-webuntis Bibliothek eventuell versteckt)
+    if hasattr(lesson, '_data'): 
+        text_pool += " " + str(lesson._data).lower()
+        
+    # Wenn irgendwo in diesem riesigen Datenpool ein Treffer ist -> Prüfung!
+    if any(keyword in text_pool for keyword in ['klausur', 'prüfung', 'pruefung', 'exam', 'schulaufgabe']):
         is_exam = True
+    # =====================================================================
 
     return {
         "fach": ", ".join([s.name for s in lesson.subjects]),
