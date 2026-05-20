@@ -26,6 +26,7 @@ import webuntis      # Die offizielle WebUntis API-Schnittstelle
 from functools import wraps
 from flask import Flask, render_template_string, request, redirect, Response
 from waitress import serve  # Ein sicherer, produktionsreifer WSGI-Webserver
+from werkzeug.security import generate_password_hash, check_password_hash # Für sicheres Passwort-Hashing
 from PIL import Image, ImageDraw, ImageFont # Pillow: Für die Bildgenerierung
 
 # ------------------------------------------------------------------------------
@@ -34,20 +35,19 @@ from PIL import Image, ImageDraw, ImageFont # Pillow: Für die Bildgenerierung
 # PÄDAGOGISCHER HINTERGRUND: "Graceful Degradation" (Gutmütiges Herabstufen)
 # Try-Except-Blöcke ermöglichen es, das Skript auch auf einem normalen 
 # Windows/Mac-Rechner zu testen und weiterzuentwickeln. Fehlt die Raspberry-
-# Hardware, fangen wir den Fehler ab und setzen die Variablen auf None, 
-# anstatt das Programm sofort mit einem harten Absturz zu beenden.
+# Hardware, fangen wir den Fehler ab und loggen ihn, anstatt abzustürzen.
 # ------------------------------------------------------------------------------
 try:
     import RPi.GPIO as GPIO
-except ImportError:
-    print("Warnung: RPi.GPIO ist nicht installiert. (Entwicklungsmodus?)")
+except ImportError as e:
+    print(f"Warnung: RPi.GPIO ist nicht installiert. Entwicklungsmodus? ({e})")
     GPIO = None
 
 try:
     import smbus2 as smbus
     i2c_bus = smbus.SMBus(1)
-except ImportError:
-    print("Warnung: smbus2 ist nicht installiert. (Entwicklungsmodus?)")
+except ImportError as e:
+    print(f"Warnung: smbus2 ist nicht installiert. Entwicklungsmodus? ({e})")
     smbus = None
     i2c_bus = None
 
@@ -58,8 +58,8 @@ if os.path.exists(libdir):
 
 try:
     from waveshare_epd import epd2in13_V3
-except ImportError:
-    print("Warnung: waveshare_epd Treiber nicht gefunden.")
+except ImportError as e:
+    print(f"Warnung: waveshare_epd Treiber nicht gefunden. ({e})")
     epd2in13_V3 = None
 
 
@@ -69,9 +69,10 @@ except ImportError:
 app = Flask(__name__)
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'config.json')
 
-# Hardware-Pins (für das 2.13 Zoll Waveshare Touch-Display)
+# Hardware-Pins & Konstanten
 TOUCH_RST_PIN = 22
 TOUCH_I2C_ADDR = 0x14                # Hexadezimale Adresse des Touch-Controllers auf dem I2C-Bus
+TOUCH_COOLDOWN = 5.0                 # Entprell-Zeit für das Touch-Display in Sekunden
 
 # Steuerungsvariablen für die Kommunikation zwischen Webserver und Hintergrund-Loop
 force_update_flag = True             # Startet auf True, damit beim Booten direkt ein Update erfolgt
@@ -82,25 +83,22 @@ shutdown_event = threading.Event()   # Thread-sicheres Signal zum sauberen Beend
 # ------------------------------------------------------------------------------
 # THREADING-LOCKS (Schutz vor "Race Conditions")
 # 
-# PÄDAGOGISCHER HINTERGRUND: In diesem Skript laufen zwei Prozesse gleichzeitig:
-# 1. Der Web-Server (Flask/Waitress), der Klicks der Benutzer verarbeitet.
-# 2. Der Hintergrund-Loop (background_loop), der die Uhrzeit prüft.
-# Wenn beide gleichzeitig eine Variable ändern oder auf das Display schreiben wollen,
-# kommt es zu Datenmüll oder Abstürzen (Race Condition).
-# Ein "Lock" (Mutex) wirkt wie ein Schlüssel zu einem Raum: Wer den Schlüssel hat, 
-# darf arbeiten. Der andere Thread muss solange an der Tür warten.
+# PÄDAGOGISCHER HINTERGRUND: Hier laufen Threads parallel (Flask-Webserver vs. 
+# Endlosschleife). Ein "Lock" (Mutex) wirkt wie ein Schlüssel zu einem Raum: 
+# Wer den Schlüssel hat, darf arbeiten. Der andere Thread wartet an der Tür.
 # ------------------------------------------------------------------------------
-display_lock = threading.Lock()      # Verhindert, dass zwei Prozesse gleichzeitig aufs SPI-Display schreiben
-state_lock = threading.Lock()        # Schützt unsere globalen Steuerungs-Flags (z.B. force_update_flag)
+display_lock = threading.Lock()      # Schützt das Hardware-Display vor simultanen Schreibzugriffen
+state_lock = threading.Lock()        # Schützt unsere globalen Steuerungs-Flags
+config_lock = threading.Lock()       # Schützt das Lesen/Schreiben der Konfigurationsdatei
 
 # Variablen für die Zeit-Simulation (Time-Travel-Feature für das Testen im Webinterface)
 simulated_datetime = None
 
-# Globaler Cache, damit das Webinterface nicht bei jedem Neuladen eine langsame API-Abfrage startet
+# Globaler Cache, damit das Webinterface nicht bei jedem Neuladen die API abfragt
 current_display_data = None
 current_display_msg = "Warte auf erstes Update..."
 
-# Performance-Caching für Dateien (Schützt die empfindliche MicroSD-Karte!)
+# Performance-Caching für Dateien
 _cached_config = {}
 _last_config_mtime = 0
 GLOBAL_FONTS = {}
@@ -111,67 +109,57 @@ GLOBAL_FONTS = {}
 # ==============================================================================
 def get_cached_config():
     """
-    Lädt die Config nur neu, wenn sie sich wirklich auf der SD-Karte geändert hat.
+    Lädt die Config nur neu, wenn sie sich auf der SD-Karte geändert hat.
     
-    PÄDAGOGISCHER HINTERGRUND (I/O-Bottleneck & Caching): 
-    Ein ständiger Zugriff auf die Festplatte/SD-Karte ist im Vergleich zum RAM 
-    extrem langsam und schadet der Hardware-Lebensdauer (Wear-out). 
-    Durch das Auslesen des Datei-Zeitstempels (getmtime) wissen wir, ob sich ein 
-    teurer, erneuter Lese-Vorgang überhaupt lohnt.
+    PÄDAGOGISCHER HINTERGRUND (I/O-Bottleneck & Thread-Safety): 
+    Ständiger Festplattenzugriff ist extrem langsam. Wir cachen die Datei.
+    Das 'with config_lock' verhindert eine Race Condition, falls Flask und der 
+    Hintergrund-Loop in exakt derselben Millisekunde auf die Datei zugreifen wollen.
     """
     global _cached_config, _last_config_mtime
-    if not os.path.exists(CONFIG_FILE): return {}
-    try:
-        # getmtime liefert die "Modified Time" als Timestamp (Zahl)
-        mtime = os.path.getmtime(CONFIG_FILE)
-        if mtime > _last_config_mtime:
-            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                content = f.read().strip()
-                _cached_config = json.loads(content) if content else {}
-            _last_config_mtime = mtime
-    except Exception as e:
-        print(f"FEHLER beim Laden der config.json: {e}")
-    return _cached_config
+    
+    with config_lock:
+        if not os.path.exists(CONFIG_FILE): return {}
+        try:
+            mtime = os.path.getmtime(CONFIG_FILE)
+            if mtime > _last_config_mtime:
+                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                    content = f.read().strip()
+                    _cached_config = json.loads(content) if content else {}
+                _last_config_mtime = mtime
+        except Exception as e:
+            print(f"FEHLER beim Laden der config.json: {e}")
+        
+        # Ein echtes Dictionary als Kopie zurückgeben, um Pointer-Probleme zu vermeiden
+        return dict(_cached_config)
 
 def save_config(config):
-    """
-    Speichert Einstellungen stromausfallsicher ab (Atomarer Schreibvorgang).
+    """Speichert Einstellungen stromausfallsicher ab (Atomarer Schreibvorgang)."""
+    global _last_config_mtime
     
-    PÄDAGOGISCHER HINTERGRUND (Atomizität):
-    Würde der Raspberry Pi genau während eines standardmäßigen 'open(file, w)' 
-    Vorgangs den Strom verlieren (weil jemand den Stecker zieht), wäre die Datei 
-    korrupt (0 Byte) und das Schild beim nächsten Booten kaputt.
-    Wir schreiben daher erst in eine versteckte, temporäre Datei und tauschen 
-    sie am Ende nahtlos (atomar) auf Betriebssystemebene aus.
-    """
-    try:
-        dir_name = os.path.dirname(CONFIG_FILE)
-        fd, temp_path = tempfile.mkstemp(dir=dir_name, text=True)
-        with os.fdopen(fd, 'w', encoding='utf-8') as f:
-            json.dump(config, f, indent=4, ensure_ascii=False)
-        # Der magische Moment: Überschreibt die alte Datei sicher und unwiderruflich
-        os.replace(temp_path, CONFIG_FILE)
-        
-        # Den RAM-Cache sofort invalidieren (auf 0 setzen), 
-        # damit das Skript beim nächsten Mal weiß, dass es neu von der Karte lesen muss.
-        global _last_config_mtime
-        _last_config_mtime = 0 
-    except Exception as e:
-        print(f"FEHLER beim Speichern der config.json: {e}")
+    with config_lock:
+        try:
+            dir_name = os.path.dirname(CONFIG_FILE)
+            fd, temp_path = tempfile.mkstemp(dir=dir_name, text=True)
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=4, ensure_ascii=False)
+            os.replace(temp_path, CONFIG_FILE)
+            
+            # Den RAM-Cache sofort invalidieren
+            _last_config_mtime = 0 
+        except Exception as e:
+            print(f"FEHLER beim Speichern der config.json: {e}")
 
 
 # ==============================================================================
 # 3.5 ZENTRALE UHR (Abstraktion der Zeit für Testzwecke)
 # ==============================================================================
-def get_now():
+def get_now() -> datetime.datetime:
     """
-    Gibt das aktuelle Datum/Uhrzeit zurück.
-    Wenn im Web-Interface die "Time Travel"-Funktion genutzt wurde, 
-    liefern wir stattdessen die simulierte Zeit zurück, um die WebUntis-API 
-    auszutricksen.
+    Gibt das aktuelle Datum/Uhrzeit zurück (inklusive Simulations-Logik).
     """
     global simulated_datetime
-    with state_lock: # Thread-Safe lesen, da der Wert über das Web verändert werden kann
+    with state_lock:
         if simulated_datetime:
             return simulated_datetime
     return datetime.datetime.now()
@@ -182,15 +170,10 @@ def get_now():
 # ==============================================================================
 def init_fonts():
     """
-    Lädt die Schriftarten beim Programmstart einmalig in den RAM.
-    
-    PÄDAGOGISCHER HINTERGRUND (Lazy Loading / Singleton-Pattern ähnlich):
-    Anstatt bei jedem Display-Refresh die schweren TrueType-Dateien neu 
-    in den Speicher zu laden, machen wir das genau einmal, sobald sie 
-    gebraucht werden, und cachen sie im globalen Dictionary.
+    Lädt die Schriftarten beim Programmstart einmalig in den RAM (Lazy Loading).
     """
     global GLOBAL_FONTS
-    if GLOBAL_FONTS: return # Schon geladen? Dann nichts tun!
+    if GLOBAL_FONTS: return 
     try: 
         GLOBAL_FONTS['mega'] = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 16)
         GLOBAL_FONTS['huge'] = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 24)
@@ -198,30 +181,24 @@ def init_fonts():
         GLOBAL_FONTS['med'] = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 14)
         GLOBAL_FONTS['reg'] = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 12)
         GLOBAL_FONTS['small'] = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 11)
-    except Exception:
-        # Fallback auf eine hässliche, aber stets verfügbare Bitmap-Schriftart
+    except Exception as e:
+        print(f"Schriftarten nicht gefunden, nutze Fallback. ({e})")
         default = ImageFont.load_default()
         GLOBAL_FONTS = {k: default for k in ['mega', 'huge', 'large', 'med', 'reg', 'small']}
 
 def check_touch_via_i2c():
-    """
-    Prüft direkt über den I2C-Bus, ob ein Finger das kapazitive Display berührt.
-    I2C ist ein serielles Datenbus-System für die Nahbereichs-Kommunikation.
-    """
+    """Prüft direkt über den I2C-Bus, ob ein kapazitives Touch-Event anliegt."""
     if not i2c_bus or not smbus: return False
     try:
-        # Schreibt auf Register 0x814E und liest die Antwort aus
         write_msg = smbus.i2c_msg.write(TOUCH_I2C_ADDR, [0x81, 0x4E])
         read_msg = smbus.i2c_msg.read(TOUCH_I2C_ADDR, 1)
         i2c_bus.i2c_rdwr(write_msg, read_msg)
         
-        # Bit-Maskierung: Wenn das höchste Bit (0x80) gesetzt ist, gibt es einen Touch
         if list(read_msg)[0] & 0x80:
-            # Quittungssignal senden, damit der Chip seinen internen Alarm zurücksetzt
             i2c_bus.write_i2c_block_data(TOUCH_I2C_ADDR, 0x81, [0x4E, 0x00])
             return True
     except Exception: 
-        pass # Stummes Ignorieren für reibungslosen Ablauf, falls Display schläft
+        pass 
     return False
 
 def clear_touch_interrupt_via_i2c():
@@ -233,18 +210,15 @@ def clear_touch_interrupt_via_i2c():
         print(f"I2C Reset Fehler: {e}")
 
 def clear_display_once():
-    """
-    Löscht das E-Paper-Display komplett weiß.
-    Wird aufgerufen, wenn das Display per Web-Schalter deaktiviert wird.
-    """
+    """Löscht das E-Paper-Display komplett weiß."""
     if shutdown_event.is_set(): return
-    if epd2in13_V3 is None: return # Hardware-Schutz, falls auf dem PC getestet wird
+    if epd2in13_V3 is None: return 
     
     with display_lock:
         try:
             epd = epd2in13_V3.EPD()
             epd.init()
-            epd.Clear(0xFF) # 0xFF ist hexadezimal für Weiß
+            epd.Clear(0xFF)
             epd.sleep()
         except Exception as e: 
             print(f"Display Clear Fehler: {e}")
@@ -256,9 +230,8 @@ def clear_display_once():
 def parse_lesson(lesson, conf):
     """
     Hilfsfunktion: Nimmt ein komplexes, rohes WebUntis-Klassenobjekt und 
-    extrahiert genau die Strings, die wir für das Display (Frontend) brauchen.
+    extrahiert genau die Strings, die wir für das Display brauchen.
     """
-    # Sicherheit (Input Validation): Falls ein kaputtes Objekt übergeben wird
     if not lesson or not getattr(lesson, 'start', None) or not getattr(lesson, 'end', None): 
         return None
     
@@ -268,7 +241,6 @@ def parse_lesson(lesson, conf):
     start_str = lesson.start.strftime("%H:%M")
     stunde_name = ""
     
-    # Sucht den passenden Anzeigenamen (z.B. "1. Std.") aus der Config
     if isinstance(lessons_conf, list):
         for l in lessons_conf:
             if l.get("start") == start_str:
@@ -277,7 +249,6 @@ def parse_lesson(lesson, conf):
     elif isinstance(lessons_conf, dict):
         stunde_name = lessons_conf.get(start_str, "")
 
-    # Vertretungs- oder Zusatzinfos auslesen (z.B. "Aufgaben in IServ bearbeiten")
     info_parts = []
     for attr in ['info', 'lstext', 'substText']:
         val = getattr(lesson, attr, '')
@@ -287,33 +258,28 @@ def parse_lesson(lesson, conf):
     stunden_info = " | ".join(info_parts)
 
     return {
-        # Listen Comprehensions (Pädagogisch): Verkürzt for-Schleifen auf eine Zeile
         "fach": ", ".join([s.name for s in getattr(lesson, 'subjects', [])]),
         "lehrer": ", ".join([t.name for t in getattr(lesson, 'teachers', [])]),
         "klasse": ", ".join([k.name for k in getattr(lesson, 'klassen', [])]),
         "zeit": f"{start_str} - {lesson.end.strftime('%H:%M')}",
         "stunde": stunde_name,
-        "status_code": getattr(lesson, 'code', None), # Gibt z.B. 'cancelled' zurück
+        "status_code": getattr(lesson, 'code', None),
         "stunden_info": stunden_info 
     }
 
 def get_current_lesson(conf):
-    """
-    Verbindet sich mit der WebUntis-API, holt den Tagesplan und filtert ihn
-    chronologisch nach "JETZT" und "DANACH".
-    """
-    # PÄDAGOGISCHER HINTERGRUND (Input Validation): 
-    # Niemals Netzwerk/API-Calls starten, wenn die Config-Pflichtdaten fehlen!
+    """Verbindet sich mit der WebUntis-API, holt den Tagesplan und filtert ihn."""
     req_keys = ['UNTIS_SERVER', 'UNTIS_USER', 'UNTIS_PASS', 'UNTIS_SCHOOL', 'ROOM_NAME']
     if not conf or any(not conf.get(k) for k in req_keys):
         return None, "Konfiguration unvollständig."
     
     session = None
-    # Timeout schützt das Skript davor, endlos zu hängen, wenn das Schul-WLAN klemmt
+    # HINWEIS: python-webuntis unterstützt nativ keinen Timeout-Parameter für die Session. 
+    # Wir setzen daher notgedrungen den globalen Socket-Timeout, um bei WLAN-Ausfällen
+    # Endlos-Hänger zu vermeiden.
     socket.setdefaulttimeout(30) 
     
     try:
-        # 1. Login bei WebUntis initialisieren
         session = webuntis.Session(
             server=conf.get('UNTIS_SERVER'),
             username=conf.get('UNTIS_USER'),
@@ -323,7 +289,6 @@ def get_current_lesson(conf):
         )
         session.login()
         
-        # 2. Raum in der Untis-Datenbank suchen
         rooms = session.rooms().filter(name=conf.get('ROOM_NAME'))
         if not rooms:
             return None, f"Raum {conf.get('ROOM_NAME')} fehlt."
@@ -332,30 +297,23 @@ def get_current_lesson(conf):
         today = now.date()
         now_time = now.time()
         
-        # Am Wochenende wird das E-Paper und die API serverseitig geschont
+        # Am Wochenende API-Schonung
+        # Verbesserung: Später könnte man hier eine Feiertags-API anbinden
         if now.weekday() >= 5: 
             return {"current": None, "next": None}, "Schönes Wochenende!"
             
-        # 3. Stundenplan laden
         timetable = session.timetable(room=rooms[0], start=today, end=today)
         if not timetable:
             return {"current": None, "next": None}, "Unterrichtsfrei"
             
-        # PÄDAGOGISCHER HINTERGRUND (Lambda-Funktionen):
-        # Wir sortieren die Liste der Stunden chronologisch. Die anonyme Lambda-Funktion
-        # sagt dem sort-Algorithmus: "Nutze das Attribut 'start' als Sortier-Kriterium".
         timetable = sorted(timetable, key=lambda l: getattr(l, 'start', datetime.datetime.max))
-        
         current_lesson = None
         next_lesson = None
         
-        # 4. Aktuelle und nächste Stunde anhand der genauen Uhrzeit bestimmen
         for lesson in timetable:
-            # Defektes Untis-Objekt? Überspringen!
             if getattr(lesson, 'start', None) is None or getattr(lesson, 'end', None) is None:
                 continue
                 
-            # 5-Minuten-Vorlauf: Das Display schaltet bereits 5 Min vor dem Klingeln um
             lesson_start_buffered = lesson.start - datetime.timedelta(minutes=5)
             
             if lesson_start_buffered <= now <= lesson.end:
@@ -363,12 +321,10 @@ def get_current_lesson(conf):
             elif lesson.start > now and next_lesson is None:
                 next_lesson = lesson
 
-        # 5. Pausen- und Freizeit-Texte ermitteln, wenn der Raum gerade nicht gebucht ist
         message = ""
         if current_lesson is None:
             schedule = conf.get("SCHEDULE", {})
             try:
-                # String "07:55" mit map in zwei Integer (Stunden, Minuten) splitten
                 ds_h, ds_m = map(int, schedule.get("DAY_START", "07:55").split(":"))
                 de_h, de_m = map(int, schedule.get("DAY_END", "15:30").split(":"))
                 
@@ -378,7 +334,6 @@ def get_current_lesson(conf):
                     message = "Unterrichtsende"
                 else:
                     message = "Raum ist frei"
-                    # Prüfen, ob wir uns exakt in einer Pause (laut Config) befinden
                     for b in schedule.get("BREAKS", []):
                         bs_h, bs_m = map(int, str(b.get("start", "00:00")).split(":"))
                         be_h, be_m = map(int, str(b.get("end", "00:00")).split(":"))
@@ -395,8 +350,6 @@ def get_current_lesson(conf):
         }, message
         
     except Exception as e:
-        # Graceful Degradation: Sprechende Fehlermeldungen für das E-Paper, 
-        # wenn die Netzwerkschicht zickt.
         error_msg = str(e)
         print(f"WebUntis API Fehler: {error_msg}")
         if "HTTPSConnectionPool" in error_msg or "NameResolutionError" in error_msg or "Max retries" in error_msg or "timeout" in error_msg.lower():
@@ -406,8 +359,6 @@ def get_current_lesson(conf):
         else:
             return None, "WebUntis offline"
     finally:
-        # PÄDAGOGISCHER HINTERGRUND: Der 'finally'-Block wird IMMER ausgeführt, 
-        # egal ob ein Fehler auftrat oder nicht. Perfekt, um Ressourcen aufzuräumen.
         if session:
             try: session.logout()
             except Exception: pass
@@ -417,66 +368,52 @@ def get_current_lesson(conf):
 # 6. DARSTELLUNGS-EBENE: E-PAPER LAYOUT & CANVAS
 # ==============================================================================
 def get_text_width(draw, text, font):
-    """
-    Hilfsfunktion zur Abwärtskompatibilität. 
-    Da sich die Pillow-Bibliothek über die Jahre stark gewandelt hat, fangen wir 
-    fehlende Methoden (z.B. das alte textsize) hierarchisch über Try-Except ab.
-    """
-    try: return draw.textlength(text, font=font) # Pillow >= 8.0.0
+    """Hilfsfunktion zur Abwärtskompatibilität für verschiedene Pillow-Versionen."""
+    try: return draw.textlength(text, font=font) 
     except AttributeError:
-        try: return draw.textbbox((0,0), text, font=font)[2] # Pillow >= 9.2.0 Fallback
-        except AttributeError: return draw.textsize(text, font=font)[0] # Pillow Legacy
+        try: return draw.textbbox((0,0), text, font=font)[2] 
+        except AttributeError: return draw.textsize(text, font=font)[0] 
 
 def draw_lesson_block(draw, lesson_data, y_offset, label_text, f_small, f_reg, f_med):
-    """
-    Zeichnet einen einzelnen Unterrichtsblock (JETZT oder DANACH) als Grafik.
-    """
+    """Zeichnet einen einzelnen Unterrichtsblock (JETZT oder DANACH) als Grafik."""
     header_text = f"{label_text} {lesson_data['stunde']} ({lesson_data['zeit']})"
-    draw.text((5, y_offset), header_text, font=f_small, fill=0) # fill=0 bedeutet Schwarz
+    draw.text((5, y_offset), header_text, font=f_small, fill=0) 
     
     status = lesson_data.get('status_code')
     y_content = y_offset + 16
     
-    # Priorität 1: Ausfall (Invertierter schwarzer Block für hohe Sichtbarkeit im Vorbeigehen)
     if status == 'cancelled':
         draw.rectangle((5, y_content, 85, y_content + 18), fill=0)
-        draw.text((8, y_content+2), "FÄLLT AUS", font=f_small, fill=255) # fill=255 bedeutet Weiß
+        draw.text((8, y_content+2), "FÄLLT AUS", font=f_small, fill=255) 
         draw.text((90, y_content), f"{lesson_data['klasse']}", font=f_reg, fill=0)
         
-    # Priorität 2: Vertretung (Invertiertes Label)
     elif status == 'irregular':
         draw.rectangle((5, y_content, 90, y_content + 18), fill=0)
         draw.text((8, y_content+2), "VERTRETUNG", font=f_small, fill=255)
         main_info = f"{lesson_data['fach']} | {lesson_data['klasse']} ({lesson_data['lehrer']})"
         draw.text((95, y_content), main_info, font=f_reg, fill=0)
         
-    # Standard-Darstellung für regulären Unterricht
     else:
         main_info = f"{lesson_data['fach']} | {lesson_data['klasse']} ({lesson_data['lehrer']})"
         draw.text((5, y_content), main_info, font=f_reg, fill=0)
 
 def update_display_logic(data, message, conf):
-    """
-    Baut das komplette visuelle Layout (die Leinwand) zusammen und sendet 
-    es an das Hardware-E-Paper über den SPI-Bus.
-    """
+    """Baut das komplette visuelle Layout zusammen und flasht es auf das E-Paper."""
     if shutdown_event.is_set(): return 
-    message = message or "" # Schutz vor TypeError (NoneType), falls API leer antwortet
+    message = message or "" 
 
     if epd2in13_V3 is None: 
         print(f"INFO: Display-Update (Simulation): {message}")
         return
         
-    with display_lock: # Sperrt das SPI-Interface für andere Threads
+    with display_lock: 
         try: 
             epd = epd2in13_V3.EPD()
             epd.init()
             
-            # Erstellt ein leeres, weißes (255) 1-Bit-Bild (Schwarzweiß) mit Displaymaßen
             image = Image.new('1', (epd.height, epd.width), 255) 
             draw = ImageDraw.Draw(image) 
             
-            # Schriften laden
             init_fonts()
             f_mega = GLOBAL_FONTS['mega']
             f_large = GLOBAL_FONTS['large']
@@ -486,13 +423,13 @@ def update_display_logic(data, message, conf):
 
             now = get_now()
             
-            # ---------------- KOPFZEILE ----------------
+            # KOPFZEILE
             draw.rectangle((0, 0, 250, 24), fill=0)
             draw.text((5, 3), conf.get('ROOM_NAME', 'Unbekannt'), font=f_med, fill=255)
             time_str = now.strftime("%d.%m.%Y %H:%M")
             draw.text((120, 5), time_str, font=f_small, fill=255)
 
-            # ---------------- HAUPTBEREICH ----------------
+            # HAUPTBEREICH
             if data and isinstance(data, dict) and (data.get('current') or data.get('next')):
                 curr_lesson = data.get('current')
                 next_lesson = data.get('next')
@@ -502,7 +439,6 @@ def update_display_logic(data, message, conf):
                 else:
                     draw.text((5, 35), message, font=f_large, fill=0)
                 
-                # Horizontale Trennlinie in der Mitte
                 draw.line((5, 68, 245, 68), fill=0, width=1)
                 
                 if next_lesson:
@@ -512,15 +448,11 @@ def update_display_logic(data, message, conf):
                     draw.text((5, 74), "DANACH:", font=f_small, fill=0)
                     draw.text((5, 90), msg_text, font=f_reg, fill=0)
             else:
-                # Aufgeräumte Einzelmeldung zentrieren (z.B. am Wochenende)
                 text_w = get_text_width(draw, message, f_mega)
                 x_pos = (250 - text_w) / 2 if text_w < 250 else 2
                 draw.text((x_pos, 60), message, font=f_mega, fill=0)
 
-            # Das fertige Bitmap-Bild über das SPI-Kabel an den Controller des E-Papers flashen
             epd.display(epd.getbuffer(image))
-            
-            # WICHTIG: Das E-Paper in den Deep-Sleep schicken. Spart Strom und schont das Panel!
             epd.sleep()
         except Exception as e:
             print(f"Hardware-Fehler (Display): {e}")
@@ -530,18 +462,14 @@ def update_display_logic(data, message, conf):
 # 7. STEUERUNGS-EBENE: HINTERGRUND-LOOP & TEST-ROUTINE
 # ==============================================================================
 def run_display_test_sequence():
-    """
-    Spielt Test-Szenarien nacheinander auf dem Hardware-Display ab.
-    Dient der Diagnose und um Schülern zu zeigen, wie das Interface reagiert.
-    """
-    global test_mode_active, current_display_data, current_display_msg, force_update_flag, state_lock
+    """Spielt Test-Szenarien nacheinander auf dem Hardware-Display ab."""
+    global test_mode_active, current_display_data, current_display_msg, force_update_flag
     
     with state_lock:
         test_mode_active = True
         
     conf = get_cached_config()
     
-    # Hartcodierte Test-Daten, orientiert an deinen Fächern für ein realistisches UI
     test_cases = [
         ( {"current": {"fach": "Geschichte", "lehrer": "Ab", "klasse": "9B", "zeit": "08:00 - 08:45", "stunde": "1. Std.", "status_code": None, "stunden_info": "Buch auf Seite 12 aufschlagen"},
            "next": {"fach": "Informatik", "lehrer": "Cd", "klasse": "11B", "zeit": "08:50 - 09:35", "stunde": "2. Std.", "status_code": None, "stunden_info": ""}}, "" ),
@@ -563,26 +491,24 @@ def run_display_test_sequence():
             current_display_msg = f"TESTLAUF ({idx+1}/{len(test_cases)})..."
         
         update_display_logic(data, msg, conf)
-        time.sleep(4) # Bild für 4 Sekunden stehen lassen
         
-    # Nach dem Test den Normalbetrieb wieder aufnehmen
+        # PÄDAGOGISCHER HINTERGRUND: shutdown_event.wait(4) statt time.sleep(4).
+        # Schützt vor Blockaden beim Herunterfahren des Programms.
+        shutdown_event.wait(4) 
+        
     with state_lock:
         test_mode_active = False
         force_update_flag = True
 
 def background_loop():
-    """
-    Der Herzmuskel der Software. Eine Endlosschleife (im eigenen Thread), die asynchron 
-    Zeiten vergleicht, I2C-Sensoren überwacht und Updates ausführt.
-    """
-    global force_update_flag, show_demo_once, current_display_data, current_display_msg, test_mode_active, state_lock
+    """Der Kernprozess, der asynchron Zeiten vergleicht und Updates ausführt."""
+    global force_update_flag, show_demo_once, current_display_data, current_display_msg, test_mode_active
     last_update = 0
     last_touch_time = time.time()
     last_minute_triggered = None
     last_static_date = None
 
     while not shutdown_event.is_set():
-        # Sicheres Auslesen des Test-Status über unser Lock
         with state_lock:
             is_testing = test_mode_active
             
@@ -595,10 +521,9 @@ def background_loop():
             shutdown_event.wait(5)
             continue
 
-        # 1. Wir generieren eine Liste von Uhrzeiten, an denen sich auf dem Plan etwas ändert
         schedule = conf.get("SCHEDULE", {})
         lessons_conf = schedule.get("LESSONS", [])
-        dyn_update_times = set() # Ein "Set" verhindert doppelte Einträge automatisch
+        dyn_update_times = set() # PÄDAGOGISCH: Schnelle 'Sets' statt langsamer 'Listen'
         
         if isinstance(lessons_conf, list):
             for l in lessons_conf:
@@ -607,16 +532,14 @@ def background_loop():
                 if start_t: 
                     dyn_update_times.add(start_t)
                     try:
-                        # Auch hier: Wir berechnen den 5-Minuten Vorlauf für das Display
                         h, m = map(int, str(start_t).split(":"))
                         dt = datetime.datetime(2000, 1, 1, h, m) - datetime.timedelta(minutes=5)
                         dyn_update_times.add(dt.strftime("%H:%M"))
                     except Exception: 
-                        pass # Leere oder falsche Startzeiten abfangen (Bug-Fix)
+                        pass 
                 if end_t: 
                     dyn_update_times.add(end_t)
         
-        # Auch Pausenzeiten und Schulbeginn/-ende ins Set aufnehmen
         for b in schedule.get("BREAKS", []):
             if b.get("start"): dyn_update_times.add(b.get("start"))
             if b.get("end"): dyn_update_times.add(b.get("end"))
@@ -624,17 +547,11 @@ def background_loop():
         dyn_update_times.add(schedule.get("DAY_START", "07:55"))
         dyn_update_times.add(schedule.get("DAY_END", "15:30"))
         
-        update_times = list(dyn_update_times)
-
-        # 2. Uhrzeiten vergleichen
         now_time_system = time.time() 
         current_dt = get_now()
         current_hm = current_dt.strftime("%H:%M")
         current_time_obj = current_dt.time()
         
-        # PÄDAGOGISCHER HINTERGRUND: Ressourcen schonen
-        # Falls wir außerhalb der Schulzeit sind, blockieren wir regelmäßige Auto-Updates
-        # Das schont nachts das E-Paper-Panel. Ein manueller Touch funktioniert aber weiterhin!
         try:
             ds_h, ds_m = map(int, schedule.get("DAY_START", "07:55").split(":"))
             de_h, de_m = map(int, schedule.get("DAY_END", "15:30").split(":"))
@@ -644,24 +561,21 @@ def background_loop():
         except Exception:
             is_active_hours = True 
 
-        # 3. Logik: Haben wir einen exakten Treffer oder ist der Intervall abgelaufen?
-        is_exact_time = (current_hm in update_times) and (last_minute_triggered != current_hm)
+        # Effiziente O(1) Suche dank Set
+        is_exact_time = (current_hm in dyn_update_times) and (last_minute_triggered != current_hm)
         is_interval_reached = (now_time_system - last_update >= conf.get('AUTO_UPDATE_SECONDS', 900)) and is_active_hours
 
-        # 4. Hardware Touch-Logik
         if conf.get('TOUCH_ACTIVE', True) and check_touch_via_i2c():
-            if now_time_system - last_touch_time > 5.0: # 5 Sekunden Cooldown (Entprellen)
+            if now_time_system - last_touch_time > TOUCH_COOLDOWN:
                 print(f"\n[TOUCH {datetime.datetime.now().strftime('%H:%M:%S')}] Display beruehrt! Update wird vorbereitet...")
                 with state_lock:
                     force_update_flag = True
             last_touch_time = now_time_system
 
-        # Sicheres Auslesen der Flags für diesen Durchlauf
         with state_lock:
             current_force_update = force_update_flag
             current_show_demo = show_demo_once
 
-        # 5. Der finale Update-Befehl
         if current_force_update or is_interval_reached or is_exact_time:
             if is_exact_time: last_minute_triggered = current_hm 
             
@@ -682,7 +596,6 @@ def background_loop():
                 else:
                     data, err = get_current_lesson(conf)
                 
-                # Cache-Daten für die Flask Web-Oberfläche thread-sicher aktualisieren
                 with state_lock:
                     current_display_data = data
                     current_display_msg = err
@@ -690,7 +603,6 @@ def background_loop():
                 current_date = current_dt.strftime("%Y-%m-%d")
                 is_static_day = err in ["Schönes Wochenende!", "Unterrichtsfrei"]
                 
-                # Wenn am Wochenende nichts passiert, überspringen wir unnötige Display-Draws
                 skip_update = False
                 if is_static_day and not is_manual:
                     if last_static_date == current_date: skip_update = True
@@ -707,7 +619,6 @@ def background_loop():
             clear_touch_interrupt_via_i2c()
             last_touch_time = time.time()
             
-        # Kurze Pause (500ms), um die CPU nicht mit 100% auszulasten (Schont den kleinen Pi Zero)
         shutdown_event.wait(0.5)
 
 
@@ -715,25 +626,34 @@ def background_loop():
 # 8. WEB-EBENE: FLASK ADMIN-INTERFACE & ROUTEN
 # ==============================================================================
 def check_auth(username, password):
-    """Überprüft die Benutzerdaten für das Webinterface über den Datei-Cache."""
+    """
+    Überprüft die Benutzerdaten und hasht Passwörter bei Bedarf transparent.
+    
+    PÄDAGOGISCHER HINTERGRUND (Kryptographie):
+    Passwörter niemals im Klartext in Config-Dateien speichern! 
+    Wir nutzen 'werkzeug.security', um das Klartext-Passwort aus der config.json 
+    einmalig in einen Einweg-Hash (scrypt/pbkdf2) umzuwandeln.
+    """
     conf = get_cached_config()
     u = conf.get('ADMIN_USER', 'admin')
-    p = conf.get('ADMIN_PASS', 'tuerschild')
-    return username == u and password == p
+    saved_pass = conf.get('ADMIN_PASS', 'tuerschild')
+    
+    if not saved_pass.startswith('scrypt:') and not saved_pass.startswith('pbkdf2:'):
+        # Auto-Hashing: Das Passwort liegt noch unverschlüsselt vor.
+        print("INFO: Klartext-Passwort entdeckt. Wird verschlüsselt und gespeichert...")
+        hashed_pass = generate_password_hash(saved_pass)
+        conf['ADMIN_PASS'] = hashed_pass
+        save_config(conf)
+        saved_pass = hashed_pass
+
+    return username == u and check_password_hash(saved_pass, password)
 
 def authenticate():
-    """Stellt die Anmeldeanforderung an den Browser (HTTP 401 Basic Auth)."""
     return Response(
     'Zugriff verweigert. Bitte korrekte Zugangsdaten eingeben.\n', 401,
     {'WWW-Authenticate': 'Basic realm="Tuerschild Admin-Bereich"'})
 
 def requires_auth(f):
-    """
-    Decorator für alle geschützten URLs. Verhindert unberechtigten Zugriff.
-    PÄDAGOGISCHER HINTERGRUND: Decorator (das @-Symbol) wrappen eine Funktion.
-    Bevor Flask die Route (z.B. /save) ausführt, läuft erst dieser Code ab,
-    der das Passwort prüft.
-    """
     @wraps(f)
     def decorated(*args, **kwargs):
         auth = request.authorization
@@ -742,6 +662,10 @@ def requires_auth(f):
         return f(*args, **kwargs)
     return decorated
 
+# PÄDAGOGISCHER HINTERGRUND (HTML Inline):
+# In professionellen Projekten lagert man HTML in einen /templates Ordner aus.
+# Da dieses Projekt aber gezielt auf absolute Portabilität ausgelegt ist 
+# ("Kopiere nur die raumanzeige.py auf den Pi"), behalten wir das Template als String.
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="de">
@@ -800,10 +724,11 @@ HTML_TEMPLATE = """
             <div class="section-title">Gerätesteuerung</div>
             <div class="btn-group">
                 <!-- 
-                PÄDAGOGISCHER HINTERGRUND: CSRF-Schutz (Cross-Site Request Forgery)
-                Aktionen, die den Serverzustand verändern, nutzen hier POST statt GET. 
-                Das ist eine elementare Sicherheitsregel, damit externe, bösartige Links
-                nicht heimlich Updates oder Schalter am Türschild betätigen können.
+                PÄDAGOGISCHER HINTERGRUND: Security-Konzept
+                Die Nutzung von POST-Requests verhindert einfache GET-Link-Angriffe, 
+                ersetzt aber (ohne Flask-WTF) keinen vollwertigen CSRF-Token-Schutz. 
+                Da dieses Web-Interface aber nur im gesicherten lokalen Schulnetz über den 
+                Nginx HTTPS-Proxy betrieben wird, ist das Risiko eines Angriffs minimal.
                 -->
                 <form action="/update" method="POST" class="inline-form btn-full">
                     <button type="submit" class="btn btn-update">Manuelles Update</button>
@@ -927,9 +852,8 @@ HTML_TEMPLATE = """
 @app.route('/')
 @requires_auth
 def index():
-    """Die Hauptseite liefert den aktuellen Cache aus, ohne eine langsame API-Anfrage zu erzwingen."""
     conf = get_cached_config()
-    global simulated_datetime, state_lock
+    global simulated_datetime
     
     with state_lock:
         is_simulated = simulated_datetime is not None
@@ -938,7 +862,6 @@ def index():
         
     display_time = get_now().strftime("%d.%m.%Y %H:%M:%S")
 
-    # Jinja2-Template-Engine füllt unsere HTML-Vorlage mit den aktuellen Variablen auf
     return render_template_string(
         HTML_TEMPLATE, 
         conf=conf, 
@@ -951,8 +874,7 @@ def index():
 @app.route('/simulate_time', methods=['POST'])
 @requires_auth
 def simulate_time():
-    """Ermöglicht das 'Zeitreisen' zur Evaluation von zukünftigen Stundenplänen."""
-    global simulated_datetime, force_update_flag, state_lock
+    global simulated_datetime, force_update_flag
     sim_time_str = request.form.get('SIM_TIME')
     if sim_time_str:
         try:
@@ -967,8 +889,7 @@ def simulate_time():
 @app.route('/reset_time', methods=['POST'])
 @requires_auth
 def reset_time():
-    """Setzt die simulierte Uhr wieder auf die echte Systemzeit zurück."""
-    global simulated_datetime, force_update_flag, state_lock
+    global simulated_datetime, force_update_flag
     with state_lock:
         simulated_datetime = None
         force_update_flag = True
@@ -977,14 +898,13 @@ def reset_time():
 @app.route('/save', methods=['POST'])
 @requires_auth
 def save():
-    """Speichert Konfigurationen über POST. Verhindert Manipulation über URL-Parameter."""
-    global force_update_flag, state_lock
+    global force_update_flag
     conf = get_cached_config()
     if conf:
         conf['ROOM_NAME'] = request.form.get('ROOM_NAME')
         try:
             val = int(request.form.get('AUTO_UPDATE_SECONDS', 900))
-            conf['AUTO_UPDATE_SECONDS'] = max(60, min(val, 86400)) # Schutz vor zu kleinen Intervallen
+            conf['AUTO_UPDATE_SECONDS'] = max(60, min(val, 86400)) 
         except Exception:
             pass
         save_config(conf)
@@ -995,7 +915,7 @@ def save():
 @app.route('/update', methods=['POST'])
 @requires_auth
 def trigger_update():
-    global force_update_flag, state_lock
+    global force_update_flag
     with state_lock:
         force_update_flag = True
     return redirect('/')
@@ -1003,8 +923,7 @@ def trigger_update():
 @app.route('/demo', methods=['POST'])
 @requires_auth
 def trigger_demo():
-    """Lädt Präsentationsdaten (simuliert) auf das E-Paper."""
-    global force_update_flag, show_demo_once, state_lock
+    global force_update_flag, show_demo_once
     with state_lock:
         show_demo_once = True
         force_update_flag = True
@@ -1013,8 +932,7 @@ def trigger_demo():
 @app.route('/test_all', methods=['POST'])
 @requires_auth
 def trigger_test_all():
-    """Triggert den Anzeigetest in einem separaten Thread, damit das Web-Interface nicht blockiert."""
-    global test_mode_active, state_lock
+    global test_mode_active
     with state_lock:
         is_testing = test_mode_active
         
@@ -1025,7 +943,7 @@ def trigger_test_all():
 @app.route('/toggle', methods=['POST'])
 @requires_auth
 def toggle_display():
-    global force_update_flag, state_lock
+    global force_update_flag
     conf = get_cached_config()
     if conf:
         conf['DISPLAY_ACTIVE'] = not conf.get('DISPLAY_ACTIVE', True)
@@ -1037,7 +955,7 @@ def toggle_display():
 @app.route('/toggle_touch', methods=['POST'])
 @requires_auth
 def toggle_touch():
-    global force_update_flag, state_lock
+    global force_update_flag
     conf = get_cached_config()
     if conf:
         conf['TOUCH_ACTIVE'] = not conf.get('TOUCH_ACTIVE', True)
@@ -1052,8 +970,6 @@ def toggle_touch():
 # ==============================================================================
 if __name__ == '__main__':
     try:
-        # Einmaliger Hardware-Reset beim Start, falls sich der Touch-Controller 
-        # durch eine Spannungsschwankung aufgehängt hat.
         if GPIO:
             try:
                 GPIO.setmode(GPIO.BCM)
@@ -1067,40 +983,33 @@ if __name__ == '__main__':
             except Exception as e:
                 print(f"GPIO Setup Fehler: {e}")
 
-        # Der Hintergrund-Loop wird gestartet (daemon=True bedeutet, er wird 
-        # automatisch beendet, wenn das Hauptprogramm endet).
         threading.Thread(target=background_loop, daemon=True).start()
             
         print(f" * Admin-Interface (Localhost): http://127.0.0.1:5000")
-        
-        # Start des sicheren Produktions-Webservers Waitress.
-        # PÄDAGOGISCHER HINTERGRUND (WSGI vs Proxy): 
-        # Flask's eigener 'app.run()' Server ist nicht für echte Netzwerke gedacht. 
-        # Waitress wickelt als WSGI-Server die Python-HTTP-Requests performant ab.
-        # Nginx (wie in der Anleitung eingerichtet) fungiert dann als noch sichererer 
-        # Proxy davor und wickelt die SSL/HTTPS-Verschlüsselung ab.
         serve(app, host='127.0.0.1', port=5000)
         
     except KeyboardInterrupt:
-        # Wird der Prozess manuell gestoppt (Strg+C), geben wir das Event-Signal
         shutdown_event.set()
     finally:
-        # PÄDAGOGISCHER HINTERGRUND: Sauberer Exit
-        # Wenn das Programm beendet wird (ob durch Fehler oder absichtlich), 
-        # MÜSSEN Hardware-Ressourcen (GPIO-Pins, SPI) wieder freigegeben werden, 
-        # sonst bleibt das System beim nächsten Start blockiert.
+        # PÄDAGOGISCHER HINTERGRUND: Deadlock-Prävention (Verklemmung)
+        # Wenn wir das Skript beenden, wollen wir das Display löschen.
+        # Aber: Wenn der Hintergrund-Loop gerade das Display beschreibt, hält er das Lock.
+        # Mit 'timeout=2' verhindern wir, dass das Herunterfahren hier für immer blockiert!
         shutdown_event.set()
         if GPIO: GPIO.cleanup()
         
-        # Sicherstellen, dass epd2in13_V3 geladen ist, bevor module_exit aufgerufen wird
         if epd2in13_V3 is not None:
-            with display_lock:
+            if display_lock.acquire(timeout=2):
                 try:
                     epd = epd2in13_V3.EPD()
                     epd.init()
-                    epd.Clear(0xFF) # Aus Datenschutz-Gründen das E-Paper beim Ausschalten "löschen"
+                    epd.Clear(0xFF)
                     epd.sleep()
                     epd2in13_V3.epdconfig.module_exit()
-                except Exception: 
-                    pass
+                except Exception as e: 
+                    print(f"Fehler beim finalen Display-Clear: {e}")
+                finally:
+                    display_lock.release()
+            else:
+                print("Warnung: Display-Lock konnte beim Beenden nicht erlangt werden.")
         sys.exit(0)
