@@ -1021,18 +1021,25 @@ def toggle_touch():
 def sys_reboot():
     print("Web-Kommando empfangen: System wird neu gestartet.")
     shutdown_event.set() # Informiert den Hintergrund-Loop, dass er das Display sauber löschen soll
-    time.sleep(2)        # Gibt der Hardware kurz Zeit zum Reagieren
-    os.system("sudo reboot")
-    return "Rebooting...", 200
+    
+    # PÄDAGOGISCHER HINTERGRUND: Asynchrone OS-Befehle
+    # Ein Timer sorgt dafür, dass die HTTP-Antwort noch sauber an den Browser gesendet wird,
+    # BEVOR das Betriebssystem die Netzwerkdienste killt.
+    threading.Timer(2.5, lambda: os.system("sudo reboot")).start()
+    
+    return "System startet neu. Bitte haben Sie einen Moment Geduld...", 200
 
 @app.route('/sys_shutdown', methods=['POST'])
 @requires_auth
 def sys_shutdown():
     print("Web-Kommando empfangen: System fährt herunter.")
     shutdown_event.set() 
-    time.sleep(2)
-    os.system("sudo shutdown now")
-    return "Shutting down...", 200
+    
+    # 'sudo poweroff' ist unter modernen Raspberry Pi OS Versionen (systemd) 
+    # die zuverlässigste Methode, um das System hart abzuschalten.
+    threading.Timer(2.5, lambda: os.system("sudo poweroff")).start()
+    
+    return "System fährt herunter. Sie können den Strom in ca. 10 Sekunden sicher trennen.", 200
 
 
 # ==============================================================================
