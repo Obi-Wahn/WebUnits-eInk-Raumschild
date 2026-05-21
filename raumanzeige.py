@@ -12,15 +12,15 @@ Zusätzlich stellt es ein lokales Web-Interface zur Administration bereit.
 
 Pädagogischer Fokus: Dieser Code ist so strukturiert, dass er im 
 Informatikunterricht als Praxisbeispiel für Nebenläufigkeit (Multithreading), 
-Ressourcen-Sperren (Locks), Kryptographie (Hashing) und defensives 
-Programmieren (Graceful Degradation) dienen kann.
+Ressourcen-Sperren (Locks), Kryptographie (Hashing), Responsives Webdesign
+(CSS Grid) und defensives Programmieren (Graceful Degradation) dienen kann.
 """
 
 # ==============================================================================
 # 1. IMPORTS & HARDWARE-SETUP
 # ==============================================================================
 import sys
-import os            # Erweitert genutzt für System-Befehle wie reboot/shutdown
+import os            # Erweitert genutzt für System-Befehle wie reboot/poweroff
 import time
 import datetime
 import json
@@ -502,7 +502,7 @@ def run_display_test_sequence():
         
     conf = get_cached_config()
     
-    # Hartcodierte Test-Daten
+    # Hartcodierte Test-Daten, didaktisch orientiert an deinen Fächern
     test_cases = [
         ( {"current": {"fach": "Geschichte", "lehrer": "Ab", "klasse": "9B", "zeit": "08:00 - 08:45", "stunde": "1. Std.", "status_code": None, "stunden_info": "Buch auf Seite 12 aufschlagen"},
            "next": {"fach": "Informatik", "lehrer": "Cd", "klasse": "11B", "zeit": "08:50 - 09:35", "stunde": "2. Std.", "status_code": None, "stunden_info": ""}}, "" ),
@@ -705,10 +705,13 @@ def requires_auth(f):
         return f(*args, **kwargs)
     return decorated
 
-# PÄDAGOGISCHER HINTERGRUND (HTML Inline):
+# PÄDAGOGISCHER HINTERGRUND (HTML Inline, CSS Flexbox & CSS Grid):
 # In großen Projekten lagert man HTML in einen /templates Ordner aus.
-# Da dieses Projekt aber gezielt auf absolute Portabilität ausgelegt ist 
-# ("Kopiere nur die raumanzeige.py auf den Pi"), behalten wir das Template hier als String.
+# Für absolute Portabilität behalten wir das Template hier als String.
+# Die HTML-Struktur ist aufgeteilt: 1. Controls(Top), 2. Preview, 3. Controls(Bottom).
+# Dadurch fließt das Layout auf dem Smartphone (Flexbox 'column') in exakt dieser Reihenfolge.
+# Auf dem Desktop greift das CSS Grid (@media) und ordnet die Controls links (1. und 2. Zeile) 
+# und die Preview rechts (über beide Zeilen gespannt) an.
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="de">
@@ -717,12 +720,17 @@ HTML_TEMPLATE = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Türschild-Admin</title>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f1f5f9; color: #1e293b; margin: 0; padding: 20px; display: flex; justify-content: center; }
-        .card { background: white; max-width: 400px; width: 100%; border-radius: 20px; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1); overflow: hidden; margin-top: 20px; margin-bottom: 20px; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f1f5f9; color: #1e293b; margin: 0; padding: 15px; display: flex; justify-content: center; }
+        .card { background: white; max-width: 950px; width: 100%; border-radius: 20px; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1); overflow: hidden; margin-top: 10px; margin-bottom: 20px; }
+        
         .header { background-color: #0f172a; color: white; padding: 30px; }
         .header h1 { margin: 0; font-size: 24px; letter-spacing: -1px; text-transform: uppercase; }
         .header p { margin: 5px 0 0; opacity: 0.6; font-size: 12px; font-weight: bold; }
         .content { padding: 30px; }
+        
+        /* Mobile First: Flexbox für die logische vertikale Reihenfolge */
+        .dashboard-grid { display: flex; flex-direction: column; gap: 0; }
+        .col-preview { margin-top: 20px; margin-bottom: 20px; }
         
         .section-title { font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; margin: 30px 0 15px 0; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px; letter-spacing: 0.5px; }
         .section-title:first-child { margin-top: 0; }
@@ -750,6 +758,36 @@ HTML_TEMPLATE = """
         
         .tag-red { background-color: #fee2e2; color: #dc2626; padding: 4px 8px; border-radius: 5px; font-size: 11px; font-weight: bold; text-transform: uppercase; margin-bottom: 6px; display: inline-block;}
         .tag-yellow { background-color: #fef08a; color: #854d0e; padding: 4px 8px; border-radius: 5px; font-size: 11px; font-weight: bold; text-transform: uppercase; margin-bottom: 6px; display: inline-block;}
+
+        /* Media Query für Desktops/Tablets im Querformat */
+        @media (min-width: 800px) {
+            body { padding: 40px 20px; }
+            .card { margin-top: 0; }
+            
+            /* CSS Grid reassembliert die Blöcke in ein 2-Spalten-Layout */
+            .dashboard-grid { 
+                display: grid; 
+                grid-template-columns: 1fr 1fr; 
+                gap: 40px; 
+                align-items: start; /* Verhindert das automatische Strecken der Spalten */
+            }
+            .col-controls-top { grid-column: 1; grid-row: 1; }
+            .col-controls-bottom { grid-column: 1; grid-row: 2; }
+            .col-preview { 
+                grid-column: 2; 
+                grid-row: 1 / span 2; /* Die Vorschau-Spalte spannt sich über beide Zeilen auf der rechten Seite */
+                margin-top: 0; 
+                margin-bottom: 0; 
+                background-color: #f8fafc; 
+                padding: 25px; 
+                border-radius: 15px; 
+                border: 2px dashed #e2e8f0; 
+            }
+            
+            .col-preview .section-title { margin-top: 0; }
+            .col-preview .lesson-block { background: white; }
+            .col-preview .empty-state { background: white; }
+        }
     </style>
 </head>
 <body>
@@ -764,129 +802,141 @@ HTML_TEMPLATE = """
                 <div class="error-msg">Konfigurationsfehler! Die Datei 'config.json' konnte nicht gelesen werden.</div>
             {% endif %}
             
-            <div class="section-title">Gerätesteuerung</div>
-            <div class="btn-group">
-                <form action="/update" method="POST" class="inline-form btn-full">
-                    <button type="submit" class="btn btn-update">Manuelles Update</button>
-                </form>
+            <div class="dashboard-grid">
                 
-                <form action="/toggle" method="POST" class="inline-form">
-                    <button type="submit" class="btn {% if conf.get('DISPLAY_ACTIVE', True) %}btn-off{% else %}btn-on{% endif %}">
-                        {% if conf.get('DISPLAY_ACTIVE', True) %}Display aus{% else %}Display an{% endif %}
-                    </button>
-                </form>
-                
-                <form action="/toggle_touch" method="POST" class="inline-form">
-                    <button type="submit" class="btn {% if conf.get('TOUCH_ACTIVE', True) %}btn-off{% else %}btn-on{% endif %}">
-                        {% if conf.get('TOUCH_ACTIVE', True) %}Touch aus{% else %}Touch an{% endif %}
-                    </button>
-                </form>
-            </div>
-            
-            <div class="section-title">Einstellungen</div>
-            <form action="/save" method="POST">
-                <div class="form-group">
-                    <label>Anzeigeraum</label>
-                    <input type="text" name="ROOM_NAME" value="{{ conf.get('ROOM_NAME', '') }}">
-                </div>
-                <div class="form-group">
-                    <label>Intervall (Sekunden)</label>
-                    <input type="number" name="AUTO_UPDATE_SECONDS" value="{{ conf.get('AUTO_UPDATE_SECONDS', 900) }}" min="60">
-                </div>
-                <button type="submit" class="btn btn-save">Speichern</button>
-            </form>
-            
-            <div class="section-title">Aktuelle Anzeige ({{ conf.get('ROOM_NAME', '') }})</div>
-            <div>
-                {% if data and data is mapping and (data.current or data.next) %}
-                    <h4 style="margin: 15px 0 5px 0; font-size: 12px; color: #64748b;">JETZT</h4>
-                    {% if data.current %}
-                        <div class="lesson-block">
-                            <div style="display: flex; justify-content: space-between; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; margin-bottom: 8px;">
-                                <strong style="color: #0f172a; font-size: 14px;">{{ data.current.stunde }}</strong>
-                                <span style="color: #64748b; font-size: 12px; font-weight: bold;">{{ data.current.zeit }}</span>
-                            </div>
-                            
-                            {% if data.current.status_code == 'cancelled' %}<div class="tag-red">Fällt aus</div>
-                            {% elif data.current.status_code == 'irregular' %}<div class="tag-yellow">Vertretung</div>{% endif %}
-                            
-                            <div style="font-size: 16px; font-weight: 800; color: #1e293b; margin-bottom: 4px;">
-                                {{ data.current.fach }} <span style="color: #cbd5e1; margin: 0 4px;">|</span> {{ data.current.klasse }}
-                            </div>
-                            <div style="font-size: 12px; color: #475569; font-weight: 600;">Lehrkraft: {{ data.current.lehrer }}</div>
-                            
-                            {% if data.current.stunden_info %}
-                            <div style="margin-top: 8px; padding: 6px 10px; background-color: #e2e8f0; border-radius: 6px; font-size: 11px; color: #334155; border-left: 3px solid #94a3b8;">
-                                <strong>Info:</strong> {{ data.current.stunden_info }}
-                            </div>
-                            {% endif %}
-                        </div>
-                    {% else %}
-                        <div class="empty-state">{{ msg }}</div>
-                    {% endif %}
-
-                    <h4 style="margin: 20px 0 5px 0; font-size: 12px; color: #64748b;">DANACH</h4>
-                    {% if data.next %}
-                        <div class="lesson-block">
-                            <div style="display: flex; justify-content: space-between; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; margin-bottom: 8px;">
-                                <strong style="color: #0f172a; font-size: 14px;">{{ data.next.stunde }}</strong>
-                                <span style="color: #64748b; font-size: 12px; font-weight: bold;">{{ data.next.zeit }}</span>
-                            </div>
-                            
-                            {% if data.next.status_code == 'cancelled' %}<div class="tag-red">Fällt aus</div>
-                            {% elif data.next.status_code == 'irregular' %}<div class="tag-yellow">Vertretung</div>{% endif %}
-                            
-                            <div style="font-size: 16px; font-weight: 800; color: #1e293b; margin-bottom: 4px;">
-                                {{ data.next.fach }} <span style="color: #cbd5e1; margin: 0 4px;">|</span> {{ data.next.klasse }}
-                            </div>
-                            <div style="font-size: 12px; color: #475569; font-weight: 600;">Lehrkraft: {{ data.next.lehrer }}</div>
-                            
-                            {% if data.next.stunden_info %}
-                            <div style="margin-top: 8px; padding: 6px 10px; background-color: #e2e8f0; border-radius: 6px; font-size: 11px; color: #334155; border-left: 3px solid #94a3b8;">
-                                <strong>Info:</strong> {{ data.next.stunden_info }}
-                            </div>
-                            {% endif %}
-                        </div>
-                    {% else %}
-                        <div class="empty-state">Kein Unterricht mehr.</div>
-                    {% endif %}
+                <!-- TEIL 1: Steuerung & Einstellungen (Mobil: oben, Desktop: links oben) -->
+                <div class="col-controls-top">
+                    <div class="section-title">Gerätesteuerung</div>
+                    <div class="btn-group">
+                        <form action="/update" method="POST" class="inline-form btn-full">
+                            <button type="submit" class="btn btn-update">Manuelles Update</button>
+                        </form>
+                        
+                        <form action="/toggle" method="POST" class="inline-form">
+                            <button type="submit" class="btn {% if conf.get('DISPLAY_ACTIVE', True) %}btn-off{% else %}btn-on{% endif %}">
+                                {% if conf.get('DISPLAY_ACTIVE', True) %}Display aus{% else %}Display an{% endif %}
+                            </button>
+                        </form>
+                        
+                        <form action="/toggle_touch" method="POST" class="inline-form">
+                            <button type="submit" class="btn {% if conf.get('TOUCH_ACTIVE', True) %}btn-off{% else %}btn-on{% endif %}">
+                                {% if conf.get('TOUCH_ACTIVE', True) %}Touch aus{% else %}Touch an{% endif %}
+                            </button>
+                        </form>
+                    </div>
                     
-                {% else %}
-                    <div class="empty-state" style="font-size: 16px; padding: 30px 20px;">{{ msg }}</div>
-                {% endif %}
-            </div>
-            
-            <div class="section-title">Test & Simulation</div>
-            
-            <div style="background: #f8fafc; border-radius: 10px; padding: 15px; margin-bottom: 15px; border: 1px solid #e2e8f0;">
-                <label>Datum & Uhrzeit simulieren</label>
-                <form action="/simulate_time" method="POST" style="margin-bottom: 10px;">
-                    <input type="datetime-local" name="SIM_TIME" required style="margin-bottom: 10px;">
-                    <button type="submit" class="btn btn-test">Zeit simulieren</button>
-                </form>
-                <form action="/reset_time" method="POST" class="inline-form">
-                    <button type="submit" class="btn btn-update">Zurück zur Echtzeit</button>
-                </form>
-            </div>
-            
-            <div class="btn-group">
-                <form action="/demo" method="POST" class="inline-form btn-full">
-                    <button type="submit" class="btn btn-demo">Lokale Dummy-Daten laden</button>
-                </form>
-                <form action="/test_all" method="POST" class="inline-form btn-full">
-                    <button type="submit" class="btn btn-test" style="background-color: #0f172a;">Display-Testlauf (ca. 30 Sek)</button>
-                </form>
-            </div>
-            
-            <div class="section-title">System</div>
-            <div class="btn-group">
-                <form action="/sys_reboot" method="POST" class="inline-form btn-full" onsubmit="return confirm('Raspberry Pi wirklich neu starten? Das E-Paper wird kurz abgeschaltet.');">
-                    <button type="submit" class="btn btn-test" style="background-color: #475569;">System Neustart</button>
-                </form>
-                <form action="/sys_shutdown" method="POST" class="inline-form btn-full" onsubmit="return confirm('ACHTUNG: Raspberry Pi wirklich herunterfahren? Er muss danach manuell vom Strom getrennt und wieder verbunden werden, um neu zu starten!');">
-                    <button type="submit" class="btn btn-off" style="background-color: #94a3b8; color: #0f172a;">System Herunterfahren</button>
-                </form>
-            </div>
+                    <div class="section-title">Einstellungen</div>
+                    <form action="/save" method="POST">
+                        <div class="form-group">
+                            <label>Anzeigeraum</label>
+                            <input type="text" name="ROOM_NAME" value="{{ conf.get('ROOM_NAME', '') }}">
+                        </div>
+                        <div class="form-group">
+                            <label>Intervall (Sekunden)</label>
+                            <input type="number" name="AUTO_UPDATE_SECONDS" value="{{ conf.get('AUTO_UPDATE_SECONDS', 900) }}" min="60">
+                        </div>
+                        <button type="submit" class="btn btn-save">Speichern</button>
+                    </form>
+                </div>
+                
+                <!-- TEIL 2: Live-Vorschau (Mobil: Mitte, Desktop: rechts) -->
+                <div class="col-preview">
+                    <div class="section-title">Aktuelle Anzeige ({{ conf.get('ROOM_NAME', '') }})</div>
+                    <div>
+                        {% if data and data is mapping and (data.current or data.next) %}
+                            <h4 style="margin: 15px 0 5px 0; font-size: 12px; color: #64748b;">JETZT</h4>
+                            {% if data.current %}
+                                <div class="lesson-block">
+                                    <div style="display: flex; justify-content: space-between; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; margin-bottom: 8px;">
+                                        <strong style="color: #0f172a; font-size: 14px;">{{ data.current.stunde }}</strong>
+                                        <span style="color: #64748b; font-size: 12px; font-weight: bold;">{{ data.current.zeit }}</span>
+                                    </div>
+                                    
+                                    {% if data.current.status_code == 'cancelled' %}<div class="tag-red">Fällt aus</div>
+                                    {% elif data.current.status_code == 'irregular' %}<div class="tag-yellow">Vertretung</div>{% endif %}
+                                    
+                                    <div style="font-size: 16px; font-weight: 800; color: #1e293b; margin-bottom: 4px;">
+                                        {{ data.current.fach }} <span style="color: #cbd5e1; margin: 0 4px;">|</span> {{ data.current.klasse }}
+                                    </div>
+                                    <div style="font-size: 12px; color: #475569; font-weight: 600;">Lehrkraft: {{ data.current.lehrer }}</div>
+                                    
+                                    {% if data.current.stunden_info %}
+                                    <div style="margin-top: 8px; padding: 6px 10px; background-color: #e2e8f0; border-radius: 6px; font-size: 11px; color: #334155; border-left: 3px solid #94a3b8;">
+                                        <strong>Info:</strong> {{ data.current.stunden_info }}
+                                    </div>
+                                    {% endif %}
+                                </div>
+                            {% else %}
+                                <div class="empty-state">{{ msg }}</div>
+                            {% endif %}
+
+                            <h4 style="margin: 20px 0 5px 0; font-size: 12px; color: #64748b;">DANACH</h4>
+                            {% if data.next %}
+                                <div class="lesson-block">
+                                    <div style="display: flex; justify-content: space-between; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; margin-bottom: 8px;">
+                                        <strong style="color: #0f172a; font-size: 14px;">{{ data.next.stunde }}</strong>
+                                        <span style="color: #64748b; font-size: 12px; font-weight: bold;">{{ data.next.zeit }}</span>
+                                    </div>
+                                    
+                                    {% if data.next.status_code == 'cancelled' %}<div class="tag-red">Fällt aus</div>
+                                    {% elif data.next.status_code == 'irregular' %}<div class="tag-yellow">Vertretung</div>{% endif %}
+                                    
+                                    <div style="font-size: 16px; font-weight: 800; color: #1e293b; margin-bottom: 4px;">
+                                        {{ data.next.fach }} <span style="color: #cbd5e1; margin: 0 4px;">|</span> {{ data.next.klasse }}
+                                    </div>
+                                    <div style="font-size: 12px; color: #475569; font-weight: 600;">Lehrkraft: {{ data.next.lehrer }}</div>
+                                    
+                                    {% if data.next.stunden_info %}
+                                    <div style="margin-top: 8px; padding: 6px 10px; background-color: #e2e8f0; border-radius: 6px; font-size: 11px; color: #334155; border-left: 3px solid #94a3b8;">
+                                        <strong>Info:</strong> {{ data.next.stunden_info }}
+                                    </div>
+                                    {% endif %}
+                                </div>
+                            {% else %}
+                                <div class="empty-state">Kein Unterricht mehr.</div>
+                            {% endif %}
+                            
+                        {% else %}
+                            <div class="empty-state" style="font-size: 16px; padding: 30px 20px;">{{ msg }}</div>
+                        {% endif %}
+                    </div>
+                </div>
+                
+                <!-- TEIL 3: Test & System (Mobil: unten, Desktop: links unten) -->
+                <div class="col-controls-bottom">
+                    <div class="section-title">Test & Simulation</div>
+                    <div style="background: #f8fafc; border-radius: 10px; padding: 15px; margin-bottom: 15px; border: 1px solid #e2e8f0;">
+                        <label>Datum & Uhrzeit simulieren</label>
+                        <form action="/simulate_time" method="POST" style="margin-bottom: 10px;">
+                            <input type="datetime-local" name="SIM_TIME" required style="margin-bottom: 10px;">
+                            <button type="submit" class="btn btn-test">Zeit simulieren</button>
+                        </form>
+                        <form action="/reset_time" method="POST" class="inline-form">
+                            <button type="submit" class="btn btn-update">Zurück zur Echtzeit</button>
+                        </form>
+                    </div>
+                    
+                    <div class="btn-group">
+                        <form action="/demo" method="POST" class="inline-form btn-full">
+                            <button type="submit" class="btn btn-demo">Lokale Dummy-Daten laden</button>
+                        </form>
+                        <form action="/test_all" method="POST" class="inline-form btn-full">
+                            <button type="submit" class="btn btn-test" style="background-color: #0f172a;">Display-Testlauf (ca. 30 Sek)</button>
+                        </form>
+                    </div>
+
+                    <div class="section-title">System</div>
+                    <div class="btn-group">
+                        <form action="/sys_reboot" method="POST" class="inline-form btn-full" onsubmit="return confirm('Raspberry Pi wirklich neu starten? Das E-Paper wird kurz abgeschaltet.');">
+                            <button type="submit" class="btn btn-test" style="background-color: #475569;">System Neustart</button>
+                        </form>
+                        <form action="/sys_shutdown" method="POST" class="inline-form btn-full" onsubmit="return confirm('ACHTUNG: Raspberry Pi wirklich herunterfahren? Er muss danach manuell vom Strom getrennt und wieder verbunden werden, um neu zu starten!');">
+                            <button type="submit" class="btn btn-off" style="background-color: #94a3b8; color: #0f172a;">System Herunterfahren</button>
+                        </form>
+                    </div>
+                </div>
+
+            </div> <!-- Ende dashboard-grid -->
             
             <p class="footer">Status: {{ now }}{% if sim_active %} <br><strong style="color: #dc2626;">(ZEIT WIRD SIMULIERT)</strong>{% endif %}</p>
         </div>
@@ -1013,20 +1063,16 @@ def toggle_touch():
 
 # ------------------------------------------------------------------------------
 # PÄDAGOGISCHER HINTERGRUND: System-Calls (OS-Level)
-# Diese beiden Routinen zeigen, wie Python aus seiner eigenen "Blase" ausbricht 
-# und direkte Befehle an das zugrundeliegende Linux-Betriebssystem (Raspberry Pi OS) sendet.
+# Diese Routinen zeigen, wie Python direkte Befehle an Linux (Raspberry Pi OS) sendet.
+# Wir nutzen asynchrone Timer, damit der Webserver noch eine HTTP-Erfolgsmeldung 
+# an den Browser zurückschicken kann, BEVOR er sich selbst den Stecker zieht.
 # ------------------------------------------------------------------------------
 @app.route('/sys_reboot', methods=['POST'])
 @requires_auth
 def sys_reboot():
     print("Web-Kommando empfangen: System wird neu gestartet.")
-    shutdown_event.set() # Informiert den Hintergrund-Loop, dass er das Display sauber löschen soll
-    
-    # PÄDAGOGISCHER HINTERGRUND: Asynchrone OS-Befehle
-    # Ein Timer sorgt dafür, dass die HTTP-Antwort noch sauber an den Browser gesendet wird,
-    # BEVOR das Betriebssystem die Netzwerkdienste killt.
+    shutdown_event.set() 
     threading.Timer(2.5, lambda: os.system("sudo reboot")).start()
-    
     return "System startet neu. Bitte haben Sie einen Moment Geduld...", 200
 
 @app.route('/sys_shutdown', methods=['POST'])
@@ -1034,11 +1080,7 @@ def sys_reboot():
 def sys_shutdown():
     print("Web-Kommando empfangen: System fährt herunter.")
     shutdown_event.set() 
-    
-    # 'sudo poweroff' ist unter modernen Raspberry Pi OS Versionen (systemd) 
-    # die zuverlässigste Methode, um das System hart abzuschalten.
     threading.Timer(2.5, lambda: os.system("sudo poweroff")).start()
-    
     return "System fährt herunter. Sie können den Strom in ca. 10 Sekunden sicher trennen.", 200
 
 
