@@ -20,7 +20,7 @@ Programmieren (Graceful Degradation) dienen kann.
 # 1. IMPORTS & HARDWARE-SETUP
 # ==============================================================================
 import sys
-import os
+import os            # Erweitert genutzt für System-Befehle wie reboot/shutdown
 import time
 import datetime
 import json
@@ -502,7 +502,7 @@ def run_display_test_sequence():
         
     conf = get_cached_config()
     
-    # Hartcodierte Test-Daten, didaktisch orientiert an geisteswissenschaftlichen Fächern
+    # Hartcodierte Test-Daten
     test_cases = [
         ( {"current": {"fach": "Geschichte", "lehrer": "Ab", "klasse": "9B", "zeit": "08:00 - 08:45", "stunde": "1. Std.", "status_code": None, "stunden_info": "Buch auf Seite 12 aufschlagen"},
            "next": {"fach": "Informatik", "lehrer": "Cd", "klasse": "11B", "zeit": "08:50 - 09:35", "stunde": "2. Std.", "status_code": None, "stunden_info": ""}}, "" ),
@@ -668,8 +668,8 @@ def check_auth(username, password):
     PÄDAGOGISCHER HINTERGRUND (Kryptographie):
     Passwörter niemals im Klartext speichern! Wir nutzen 'werkzeug.security', 
     um das Klartext-Passwort aus der config.json einmalig in einen Einweg-Hash 
-    (scrypt/pbkdf2) umzuwandeln. Selbst wenn ein Schüler die SD-Karte stiehlt, 
-    kann er das Passwort nicht mehr zurückrechnen.
+    (scrypt/pbkdf2) umzuwandeln. Selbst wenn die SD-Karte ausgelesen wird, 
+    kann man das Passwort nicht mehr zurückrechnen.
     """
     conf = get_cached_config()
     u = conf.get('ADMIN_USER', 'admin')
@@ -766,12 +766,6 @@ HTML_TEMPLATE = """
             
             <div class="section-title">Gerätesteuerung</div>
             <div class="btn-group">
-                <!-- 
-                PÄDAGOGISCHER HINTERGRUND: Security-Konzept
-                Die Nutzung von POST-Requests verhindert einfache GET-Link-Angriffe. 
-                Da dieses Web-Interface nur im gesicherten lokalen Schulnetz über den 
-                Nginx HTTPS-Proxy betrieben wird, ist das Risiko eines Angriffs minimal.
-                -->
                 <form action="/update" method="POST" class="inline-form btn-full">
                     <button type="submit" class="btn btn-update">Manuelles Update</button>
                 </form>
@@ -881,6 +875,16 @@ HTML_TEMPLATE = """
                 </form>
                 <form action="/test_all" method="POST" class="inline-form btn-full">
                     <button type="submit" class="btn btn-test" style="background-color: #0f172a;">Display-Testlauf (ca. 30 Sek)</button>
+                </form>
+            </div>
+            
+            <div class="section-title">System</div>
+            <div class="btn-group">
+                <form action="/sys_reboot" method="POST" class="inline-form btn-full" onsubmit="return confirm('Raspberry Pi wirklich neu starten? Das E-Paper wird kurz abgeschaltet.');">
+                    <button type="submit" class="btn btn-test" style="background-color: #475569;">System Neustart</button>
+                </form>
+                <form action="/sys_shutdown" method="POST" class="inline-form btn-full" onsubmit="return confirm('ACHTUNG: Raspberry Pi wirklich herunterfahren? Er muss danach manuell vom Strom getrennt und wieder verbunden werden, um neu zu starten!');">
+                    <button type="submit" class="btn btn-off" style="background-color: #94a3b8; color: #0f172a;">System Herunterfahren</button>
                 </form>
             </div>
             
@@ -1006,6 +1010,29 @@ def toggle_touch():
         with state_lock:
             force_update_flag = True
     return redirect('/')
+
+# ------------------------------------------------------------------------------
+# PÄDAGOGISCHER HINTERGRUND: System-Calls (OS-Level)
+# Diese beiden Routinen zeigen, wie Python aus seiner eigenen "Blase" ausbricht 
+# und direkte Befehle an das zugrundeliegende Linux-Betriebssystem (Raspberry Pi OS) sendet.
+# ------------------------------------------------------------------------------
+@app.route('/sys_reboot', methods=['POST'])
+@requires_auth
+def sys_reboot():
+    print("Web-Kommando empfangen: System wird neu gestartet.")
+    shutdown_event.set() # Informiert den Hintergrund-Loop, dass er das Display sauber löschen soll
+    time.sleep(2)        # Gibt der Hardware kurz Zeit zum Reagieren
+    os.system("sudo reboot")
+    return "Rebooting...", 200
+
+@app.route('/sys_shutdown', methods=['POST'])
+@requires_auth
+def sys_shutdown():
+    print("Web-Kommando empfangen: System fährt herunter.")
+    shutdown_event.set() 
+    time.sleep(2)
+    os.system("sudo shutdown now")
+    return "Shutting down...", 200
 
 
 # ==============================================================================
