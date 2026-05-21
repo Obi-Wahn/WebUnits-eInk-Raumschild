@@ -9,6 +9,11 @@ Ein Projekt für den schulischen Einsatz (Raspberry Pi Zero 2 W)
 Dieses Skript verbindet sich mit der WebUntis API, lädt den aktuellen
 Stundenplan herunter und visualisiert ihn auf einem E-Paper-Display.
 Zusätzlich stellt es ein lokales Web-Interface zur Administration bereit.
+
+Pädagogischer Fokus: Dieser Code ist so strukturiert, dass er im 
+Informatikunterricht als Praxisbeispiel für Nebenläufigkeit (Multithreading), 
+Ressourcen-Sperren (Locks), Kryptographie (Hashing) und defensives 
+Programmieren (Graceful Degradation) dienen kann.
 """
 
 # ==============================================================================
@@ -26,7 +31,7 @@ import webuntis      # Die offizielle WebUntis API-Schnittstelle
 from functools import wraps
 from flask import Flask, render_template_string, request, redirect, Response
 from waitress import serve  # Ein sicherer, produktionsreifer WSGI-Webserver
-from werkzeug.security import generate_password_hash, check_password_hash # Für sicheres Passwort-Hashing
+from werkzeug.security import generate_password_hash, check_password_hash # Kryptographie
 from PIL import Image, ImageDraw, ImageFont # Pillow: Für die Bildgenerierung
 
 # ------------------------------------------------------------------------------
@@ -86,6 +91,8 @@ shutdown_event = threading.Event()   # Thread-sicheres Signal zum sauberen Beend
 # PÄDAGOGISCHER HINTERGRUND: Hier laufen Threads parallel (Flask-Webserver vs. 
 # Endlosschleife). Ein "Lock" (Mutex) wirkt wie ein Schlüssel zu einem Raum: 
 # Wer den Schlüssel hat, darf arbeiten. Der andere Thread wartet an der Tür.
+# Fehlen die Locks, entstehen "Race Conditions", bei denen Variablen mit 
+# inkonsistenten Werten überschrieben werden oder das SPI-Display abstürzt.
 # ------------------------------------------------------------------------------
 display_lock = threading.Lock()      # Schützt das Hardware-Display vor simultanen Schreibzugriffen
 state_lock = threading.Lock()        # Schützt unsere globalen Steuerungs-Flags
@@ -134,7 +141,14 @@ def get_cached_config():
         return dict(_cached_config)
 
 def save_config(config):
-    """Speichert Einstellungen stromausfallsicher ab (Atomarer Schreibvorgang)."""
+    """
+    Speichert Einstellungen stromausfallsicher ab.
+    
+    PÄDAGOGISCHER HINTERGRUND (Atomare Operationen):
+    Würde der Raspberry Pi während 'open(file, w)' den Strom verlieren, wäre 
+    die Datei korrupt (0 Byte). Wir schreiben daher erst in eine temporäre Datei 
+    und tauschen sie am Ende nahtlos (atomar) auf Betriebssystemebene aus.
+    """
     global _last_config_mtime
     
     with config_lock:
@@ -171,6 +185,7 @@ def get_now() -> datetime.datetime:
 def init_fonts():
     """
     Lädt die Schriftarten beim Programmstart einmalig in den RAM (Lazy Loading).
+    Verhindert langsame Festplattenzugriffe bei jedem Display-Refresh.
     """
     global GLOBAL_FONTS
     if GLOBAL_FONTS: return 
@@ -194,7 +209,9 @@ def check_touch_via_i2c():
         read_msg = smbus.i2c_msg.read(TOUCH_I2C_ADDR, 1)
         i2c_bus.i2c_rdwr(write_msg, read_msg)
         
+        # Bit-Maskierung: Wenn das höchste Bit (0x80) gesetzt ist, gibt es einen Touch
         if list(read_msg)[0] & 0x80:
+            # Quittungssignal senden, damit der Chip seinen internen Alarm zurücksetzt
             i2c_bus.write_i2c_block_data(TOUCH_I2C_ADDR, 0x81, [0x4E, 0x00])
             return True
     except Exception: 
@@ -232,6 +249,7 @@ def parse_lesson(lesson, conf):
     Hilfsfunktion: Nimmt ein komplexes, rohes WebUntis-Klassenobjekt und 
     extrahiert genau die Strings, die wir für das Display brauchen.
     """
+    # Sicherheit (Input Validation): Falls ein kaputtes Objekt übergeben wird
     if not lesson or not getattr(lesson, 'start', None) or not getattr(lesson, 'end', None): 
         return None
     
@@ -269,12 +287,14 @@ def parse_lesson(lesson, conf):
 
 def get_current_lesson(conf):
     """Verbindet sich mit der WebUntis-API, holt den Tagesplan und filtert ihn."""
+    
+    # Input Validation: Niemals API-Calls starten, wenn Pflichtdaten fehlen!
     req_keys = ['UNTIS_SERVER', 'UNTIS_USER', 'UNTIS_PASS', 'UNTIS_SCHOOL', 'ROOM_NAME']
     if not conf or any(not conf.get(k) for k in req_keys):
         return None, "Konfiguration unvollständig."
     
     session = None
-    # HINWEIS: python-webuntis unterstützt nativ keinen Timeout-Parameter für die Session. 
+    # HINWEIS: python-webuntis unterstützt nativ keinen Timeout-Parameter. 
     # Wir setzen daher notgedrungen den globalen Socket-Timeout, um bei WLAN-Ausfällen
     # Endlos-Hänger zu vermeiden.
     socket.setdefaulttimeout(30) 
@@ -298,7 +318,6 @@ def get_current_lesson(conf):
         now_time = now.time()
         
         # Am Wochenende API-Schonung
-        # Verbesserung: Später könnte man hier eine Feiertags-API anbinden
         if now.weekday() >= 5: 
             return {"current": None, "next": None}, "Schönes Wochenende!"
             
@@ -306,6 +325,9 @@ def get_current_lesson(conf):
         if not timetable:
             return {"current": None, "next": None}, "Unterrichtsfrei"
             
+        # PÄDAGOGISCHER HINTERGRUND (Lambda-Funktionen):
+        # Wir sortieren chronologisch. Die anonyme Lambda-Funktion nutzt 'start' 
+        # als Sortier-Kriterium. Fallback auf datetime.max verhindert Abstürze bei None.
         timetable = sorted(timetable, key=lambda l: getattr(l, 'start', datetime.datetime.max))
         current_lesson = None
         next_lesson = None
@@ -314,6 +336,7 @@ def get_current_lesson(conf):
             if getattr(lesson, 'start', None) is None or getattr(lesson, 'end', None) is None:
                 continue
                 
+            # 5-Minuten-Vorlauf: Das Display schaltet bereits 5 Min vor dem Klingeln um
             lesson_start_buffered = lesson.start - datetime.timedelta(minutes=5)
             
             if lesson_start_buffered <= now <= lesson.end:
@@ -350,6 +373,7 @@ def get_current_lesson(conf):
         }, message
         
     except Exception as e:
+        # Graceful Degradation: Sprechende Fehlermeldungen für das E-Paper
         error_msg = str(e)
         print(f"WebUntis API Fehler: {error_msg}")
         if "HTTPSConnectionPool" in error_msg or "NameResolutionError" in error_msg or "Max retries" in error_msg or "timeout" in error_msg.lower():
@@ -368,7 +392,10 @@ def get_current_lesson(conf):
 # 6. DARSTELLUNGS-EBENE: E-PAPER LAYOUT & CANVAS
 # ==============================================================================
 def get_text_width(draw, text, font):
-    """Hilfsfunktion zur Abwärtskompatibilität für verschiedene Pillow-Versionen."""
+    """
+    Hilfsfunktion zur Abwärtskompatibilität für verschiedene Pillow-Versionen.
+    Vermeidet Abstürze auf älteren oder brandneuen Betriebssystemen.
+    """
     try: return draw.textlength(text, font=font) 
     except AttributeError:
         try: return draw.textbbox((0,0), text, font=font)[2] 
@@ -382,17 +409,20 @@ def draw_lesson_block(draw, lesson_data, y_offset, label_text, f_small, f_reg, f
     status = lesson_data.get('status_code')
     y_content = y_offset + 16
     
+    # Priorität 1: Ausfall (Invertierter schwarzer Block für hohe Sichtbarkeit)
     if status == 'cancelled':
         draw.rectangle((5, y_content, 85, y_content + 18), fill=0)
         draw.text((8, y_content+2), "FÄLLT AUS", font=f_small, fill=255) 
         draw.text((90, y_content), f"{lesson_data['klasse']}", font=f_reg, fill=0)
         
+    # Priorität 2: Vertretung (Invertiertes Label)
     elif status == 'irregular':
         draw.rectangle((5, y_content, 90, y_content + 18), fill=0)
         draw.text((8, y_content+2), "VERTRETUNG", font=f_small, fill=255)
         main_info = f"{lesson_data['fach']} | {lesson_data['klasse']} ({lesson_data['lehrer']})"
         draw.text((95, y_content), main_info, font=f_reg, fill=0)
         
+    # Standard-Darstellung
     else:
         main_info = f"{lesson_data['fach']} | {lesson_data['klasse']} ({lesson_data['lehrer']})"
         draw.text((5, y_content), main_info, font=f_reg, fill=0)
@@ -452,7 +482,9 @@ def update_display_logic(data, message, conf):
                 x_pos = (250 - text_w) / 2 if text_w < 250 else 2
                 draw.text((x_pos, 60), message, font=f_mega, fill=0)
 
+            # Das fertige Bitmap an den E-Paper-Controller senden
             epd.display(epd.getbuffer(image))
+            # WICHTIG: Display schlafen legen, um Lebensdauer zu erhalten und Strom zu sparen
             epd.sleep()
         except Exception as e:
             print(f"Hardware-Fehler (Display): {e}")
@@ -470,6 +502,7 @@ def run_display_test_sequence():
         
     conf = get_cached_config()
     
+    # Hartcodierte Test-Daten, didaktisch orientiert an geisteswissenschaftlichen Fächern
     test_cases = [
         ( {"current": {"fach": "Geschichte", "lehrer": "Ab", "klasse": "9B", "zeit": "08:00 - 08:45", "stunde": "1. Std.", "status_code": None, "stunden_info": "Buch auf Seite 12 aufschlagen"},
            "next": {"fach": "Informatik", "lehrer": "Cd", "klasse": "11B", "zeit": "08:50 - 09:35", "stunde": "2. Std.", "status_code": None, "stunden_info": ""}}, "" ),
@@ -493,7 +526,7 @@ def run_display_test_sequence():
         update_display_logic(data, msg, conf)
         
         # PÄDAGOGISCHER HINTERGRUND: shutdown_event.wait(4) statt time.sleep(4).
-        # Schützt vor Blockaden beim Herunterfahren des Programms.
+        # Schützt vor Blockaden beim Herunterfahren des Programms (Graceful Exit).
         shutdown_event.wait(4) 
         
     with state_lock:
@@ -523,7 +556,9 @@ def background_loop():
 
         schedule = conf.get("SCHEDULE", {})
         lessons_conf = schedule.get("LESSONS", [])
-        dyn_update_times = set() # PÄDAGOGISCH: Schnelle 'Sets' statt langsamer 'Listen'
+        
+        # PÄDAGOGISCH: Schnelle Suchvorgänge O(1) mit 'Sets' statt langsamer 'Listen'
+        dyn_update_times = set() 
         
         if isinstance(lessons_conf, list):
             for l in lessons_conf:
@@ -561,10 +596,11 @@ def background_loop():
         except Exception:
             is_active_hours = True 
 
-        # Effiziente O(1) Suche dank Set
+        # Logik: Haben wir einen exakten Treffer oder ist der Intervall abgelaufen?
         is_exact_time = (current_hm in dyn_update_times) and (last_minute_triggered != current_hm)
         is_interval_reached = (now_time_system - last_update >= conf.get('AUTO_UPDATE_SECONDS', 900)) and is_active_hours
 
+        # Hardware Touch-Logik
         if conf.get('TOUCH_ACTIVE', True) and check_touch_via_i2c():
             if now_time_system - last_touch_time > TOUCH_COOLDOWN:
                 print(f"\n[TOUCH {datetime.datetime.now().strftime('%H:%M:%S')}] Display beruehrt! Update wird vorbereitet...")
@@ -630,9 +666,10 @@ def check_auth(username, password):
     Überprüft die Benutzerdaten und hasht Passwörter bei Bedarf transparent.
     
     PÄDAGOGISCHER HINTERGRUND (Kryptographie):
-    Passwörter niemals im Klartext in Config-Dateien speichern! 
-    Wir nutzen 'werkzeug.security', um das Klartext-Passwort aus der config.json 
-    einmalig in einen Einweg-Hash (scrypt/pbkdf2) umzuwandeln.
+    Passwörter niemals im Klartext speichern! Wir nutzen 'werkzeug.security', 
+    um das Klartext-Passwort aus der config.json einmalig in einen Einweg-Hash 
+    (scrypt/pbkdf2) umzuwandeln. Selbst wenn ein Schüler die SD-Karte stiehlt, 
+    kann er das Passwort nicht mehr zurückrechnen.
     """
     conf = get_cached_config()
     u = conf.get('ADMIN_USER', 'admin')
@@ -654,6 +691,12 @@ def authenticate():
     {'WWW-Authenticate': 'Basic realm="Tuerschild Admin-Bereich"'})
 
 def requires_auth(f):
+    """
+    Decorator für alle geschützten URLs. Verhindert unberechtigten Zugriff.
+    PÄDAGOGISCHER HINTERGRUND: Decorator (das @-Symbol) wrappen eine Funktion.
+    Bevor Flask die Route (z.B. /save) ausführt, läuft erst dieser Code ab,
+    der das Passwort prüft.
+    """
     @wraps(f)
     def decorated(*args, **kwargs):
         auth = request.authorization
@@ -663,9 +706,9 @@ def requires_auth(f):
     return decorated
 
 # PÄDAGOGISCHER HINTERGRUND (HTML Inline):
-# In professionellen Projekten lagert man HTML in einen /templates Ordner aus.
+# In großen Projekten lagert man HTML in einen /templates Ordner aus.
 # Da dieses Projekt aber gezielt auf absolute Portabilität ausgelegt ist 
-# ("Kopiere nur die raumanzeige.py auf den Pi"), behalten wir das Template als String.
+# ("Kopiere nur die raumanzeige.py auf den Pi"), behalten wir das Template hier als String.
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="de">
@@ -725,9 +768,8 @@ HTML_TEMPLATE = """
             <div class="btn-group">
                 <!-- 
                 PÄDAGOGISCHER HINTERGRUND: Security-Konzept
-                Die Nutzung von POST-Requests verhindert einfache GET-Link-Angriffe, 
-                ersetzt aber (ohne Flask-WTF) keinen vollwertigen CSRF-Token-Schutz. 
-                Da dieses Web-Interface aber nur im gesicherten lokalen Schulnetz über den 
+                Die Nutzung von POST-Requests verhindert einfache GET-Link-Angriffe. 
+                Da dieses Web-Interface nur im gesicherten lokalen Schulnetz über den 
                 Nginx HTTPS-Proxy betrieben wird, ist das Risiko eines Angriffs minimal.
                 -->
                 <form action="/update" method="POST" class="inline-form btn-full">
@@ -862,6 +904,7 @@ def index():
         
     display_time = get_now().strftime("%d.%m.%Y %H:%M:%S")
 
+    # Jinja2-Template-Engine füllt unsere HTML-Vorlage mit den aktuellen Variablen auf
     return render_template_string(
         HTML_TEMPLATE, 
         conf=conf, 
@@ -986,15 +1029,18 @@ if __name__ == '__main__':
         threading.Thread(target=background_loop, daemon=True).start()
             
         print(f" * Admin-Interface (Localhost): http://127.0.0.1:5000")
+        # PÄDAGOGISCHER HINTERGRUND (WSGI vs Proxy): 
+        # Flask's eigener 'app.run()' Server ist nicht für echte Netzwerke gedacht. 
+        # Waitress wickelt als WSGI-Server die Python-HTTP-Requests performant ab.
         serve(app, host='127.0.0.1', port=5000)
         
     except KeyboardInterrupt:
         shutdown_event.set()
     finally:
         # PÄDAGOGISCHER HINTERGRUND: Deadlock-Prävention (Verklemmung)
-        # Wenn wir das Skript beenden, wollen wir das Display löschen.
-        # Aber: Wenn der Hintergrund-Loop gerade das Display beschreibt, hält er das Lock.
-        # Mit 'timeout=2' verhindern wir, dass das Herunterfahren hier für immer blockiert!
+        # Wenn wir das Skript beenden, wollen wir das Display löschen (Datenschutz).
+        # Aber: Wenn der Hintergrund-Loop gerade auf das Display schreibt, hält er das Lock.
+        # Mit 'timeout=2' verhindern wir, dass das Herunterfahren hier ewig blockiert!
         shutdown_event.set()
         if GPIO: GPIO.cleanup()
         
