@@ -13,7 +13,7 @@ Zusätzlich stellt es ein lokales Web-Interface zur Administration bereit.
 Pädagogischer Fokus: Dieser Code ist so strukturiert, dass er im 
 Informatikunterricht als Praxisbeispiel für Nebenläufigkeit (Multithreading), 
 Ressourcen-Sperren (Locks), Kryptographie (Hashing), Responsives Webdesign
-(CSS Grid) und defensives Programmieren (Graceful Degradation) dienen kann.
+(CSS Grid) und das "Prinzip der geringsten Privilegien" (PoLP) dienen kann.
 """
 
 # ==============================================================================
@@ -27,7 +27,7 @@ import json
 import threading     # Für asynchrone Prozesse (Hintergrund-Schleife)
 import socket        # Für Netzwerk-Timeouts
 import tempfile      # Für sicheres (atomares) Speichern von Dateien
-import subprocess    # Für absolute, sichere System-Aufrufe an das Linux-OS
+import subprocess    # Für sichere System-Aufrufe an das Linux-OS
 import webuntis      # Die offizielle WebUntis API-Schnittstelle
 from functools import wraps
 from flask import Flask, render_template_string, request, redirect, Response
@@ -120,7 +120,7 @@ def get_cached_config():
     Lädt die Config nur neu, wenn sie sich auf der SD-Karte geändert hat.
     
     PÄDAGOGISCHER HINTERGRUND (I/O-Bottleneck & Thread-Safety): 
-    Ständiger Festplattenzugriff ist extrem langsam. Wir cachen die Datei.
+    Ständiger Festplattenzugriff ist extrem langsam. Wir cachen die Datei im RAM.
     Das 'with config_lock' verhindert eine Race Condition, falls Flask und der 
     Hintergrund-Loop in exakt derselben Millisekunde auf die Datei zugreifen wollen.
     """
@@ -374,7 +374,8 @@ def get_current_lesson(conf):
         }, message
         
     except Exception as e:
-        # Graceful Degradation: Sprechende Fehlermeldungen für das E-Paper
+        # PÄDAGOGISCHER HINTERGRUND: Graceful Degradation
+        # Sprechende Fehlermeldungen für das E-Paper, wenn z.B. das WLAN wegbricht.
         error_msg = str(e)
         print(f"WebUntis API Fehler: {error_msg}")
         if "HTTPSConnectionPool" in error_msg or "NameResolutionError" in error_msg or "Max retries" in error_msg or "timeout" in error_msg.lower():
@@ -503,7 +504,7 @@ def run_display_test_sequence():
         
     conf = get_cached_config()
     
-    # Hartcodierte Test-Daten, didaktisch orientiert an deinen Unterrichtsfächern
+    # Hartcodierte Test-Daten, didaktisch orientiert an deinen Fächern
     test_cases = [
         ( {"current": {"fach": "Geschichte", "lehrer": "Ab", "klasse": "9B", "zeit": "08:00 - 08:45", "stunde": "1. Std.", "status_code": None, "stunden_info": "Buch auf Seite 12 aufschlagen"},
            "next": {"fach": "Informatik", "lehrer": "Cd", "klasse": "11B", "zeit": "08:50 - 09:35", "stunde": "2. Std.", "status_code": None, "stunden_info": ""}}, "" ),
@@ -770,13 +771,13 @@ HTML_TEMPLATE = """
                 display: grid; 
                 grid-template-columns: 1fr 1fr; 
                 gap: 40px; 
-                align-items: start; /* Verhindert das automatische Strecken der Spalten */
+                align-items: start; 
             }
             .col-controls-top { grid-column: 1; grid-row: 1; }
             .col-controls-bottom { grid-column: 1; grid-row: 2; }
             .col-preview { 
                 grid-column: 2; 
-                grid-row: 1 / span 2; /* Die Vorschau-Spalte spannt sich über beide Zeilen auf der rechten Seite */
+                grid-row: 1 / span 2; 
                 margin-top: 0; 
                 margin-bottom: 0; 
                 background-color: #f8fafc; 
@@ -805,7 +806,6 @@ HTML_TEMPLATE = """
             
             <div class="dashboard-grid">
                 
-                <!-- TEIL 1: Steuerung & Einstellungen (Mobil: oben, Desktop: links oben) -->
                 <div class="col-controls-top">
                     <div class="section-title">Gerätesteuerung</div>
                     <div class="btn-group">
@@ -840,7 +840,6 @@ HTML_TEMPLATE = """
                     </form>
                 </div>
                 
-                <!-- TEIL 2: Live-Vorschau (Mobil: Mitte, Desktop: rechts) -->
                 <div class="col-preview">
                     <div class="section-title">Aktuelle Anzeige ({{ conf.get('ROOM_NAME', '') }})</div>
                     <div>
@@ -903,7 +902,6 @@ HTML_TEMPLATE = """
                     </div>
                 </div>
                 
-                <!-- TEIL 3: Test & System (Mobil: unten, Desktop: links unten) -->
                 <div class="col-controls-bottom">
                     <div class="section-title">Test & Simulation</div>
                     <div style="background: #f8fafc; border-radius: 10px; padding: 15px; margin-bottom: 15px; border: 1px solid #e2e8f0;">
@@ -928,7 +926,6 @@ HTML_TEMPLATE = """
 
                     <div class="section-title">System</div>
                     <div class="btn-group">
-                        <!-- PÄDAGOGISCHER HINTERGRUND: onsubmit führt eine clientseitige JS-Validierung (confirm) aus -->
                         <form action="/sys_reboot" method="POST" class="inline-form btn-full" onsubmit="return confirm('Raspberry Pi wirklich neu starten? Das E-Paper wird kurz abgeschaltet.');">
                             <button type="submit" class="btn btn-test" style="background-color: #475569;">System Neustart</button>
                         </form>
@@ -938,7 +935,7 @@ HTML_TEMPLATE = """
                     </div>
                 </div>
 
-            </div> <!-- Ende dashboard-grid -->
+            </div>
             
             <p class="footer">Status: {{ now }}{% if sim_active %} <br><strong style="color: #dc2626;">(ZEIT WIRD SIMULIERT)</strong>{% endif %}</p>
         </div>
@@ -1064,16 +1061,15 @@ def toggle_touch():
     return redirect('/')
 
 # ------------------------------------------------------------------------------
-# PÄDAGOGISCHER HINTERGRUND: Dämonen, TTYs und "Fire & Forget"
-# Wenn ein Skript per Autostart (systemd) hochfährt, ist es ein "Daemon" (Hintergrundprozess)
-# ohne echte Benutzeroberfläche oder Konsole (TTY). Linux-Befehle wie 'sudo' geraten dann oft 
-# ins Stocken, weil sie sicherheitshalber unsichtbar nach einem Passwort oder einer Bestätigung 
-# fragen wollen – das Skript bleibt hängen!
-# 
-# Lösung 1: Der Parameter '-n' (non-interactive) zwingt sudo, niemals nachzufragen.
-# Lösung 2: Absolute Pfade (/usr/bin/sudo), da Dämonen oft einen eingeschränkten $PATH haben.
-# Lösung 3: subprocess.Popen() statt .run(). Popen schießt den Befehl ab und entkoppelt ihn 
-# vom Python-Skript ("Fire & Forget"), damit sich das System nicht selbst blockiert.
+# PÄDAGOGISCHER HINTERGRUND: "Principle of Least Privilege" & Sudoers
+# Ein Webserver sollte NIE als root (Super-Administrator) laufen. Wenn Hacker 
+# eindringen, hätten sie sonst sofort die volle Kontrolle über das ganze System!
+# Wir nutzen daher wieder den normalen, eingeschränkten User 'pi'.
+# Damit dieser User dennoch den Pi per Web-Button neustarten kann, konfigurieren 
+# wir Linux (in der Datei /etc/sudoers) so, dass der User 'pi' ausnahmsweise 
+# genau diesen EINEN Befehl mit 'sudo' ausführen darf, OHNE nach einem Passwort 
+# gefragt zu werden. Die Flag '-n' stellt hierbei nochmal sicher, dass sudo 
+# im Hintergrund nicht unsichtbar nach einem Passwort verlangt und blockiert.
 # ------------------------------------------------------------------------------
 @app.route('/sys_reboot', methods=['POST'])
 @requires_auth
@@ -1083,7 +1079,7 @@ def sys_reboot():
     
     def delayed_reboot():
         time.sleep(2.5)
-        # Popen startet den Befehl im Hintergrund, ohne auf das Ende zu warten.
+        # Popen startet den Befehl im Hintergrund, entkoppelt vom Python-Skript ("Fire & Forget")
         subprocess.Popen(["/usr/bin/sudo", "-n", "/sbin/reboot"])
         
     threading.Thread(target=delayed_reboot, daemon=True).start()
