@@ -1064,18 +1064,29 @@ def toggle_touch():
     return redirect('/')
 
 # ------------------------------------------------------------------------------
-# PÄDAGOGISCHER HINTERGRUND: Absolute Pfade & Subprocess Modul
-# Daemons (wie systemd) haben beim Booten oft keine vollständigen Umgebungsvariablen ($PATH).
-# Ein einfaches os.system('sudo reboot') schlägt oft fehl, weil das Skript den Ort des 
-# Befehls nicht kennt. Wir nutzen daher das moderne 'subprocess' Modul und weisen Python 
-# an, exakt die absoluten Dateipfade /usr/bin/sudo und /bin/systemctl zu verwenden!
+# PÄDAGOGISCHER HINTERGRUND: Dämonen, TTYs und "Fire & Forget"
+# Wenn ein Skript per Autostart (systemd) hochfährt, ist es ein "Daemon" (Hintergrundprozess)
+# ohne echte Benutzeroberfläche oder Konsole (TTY). Linux-Befehle wie 'sudo' geraten dann oft 
+# ins Stocken, weil sie sicherheitshalber unsichtbar nach einem Passwort oder einer Bestätigung 
+# fragen wollen – das Skript bleibt hängen!
+# 
+# Lösung 1: Der Parameter '-n' (non-interactive) zwingt sudo, niemals nachzufragen.
+# Lösung 2: Absolute Pfade (/usr/bin/sudo), da Dämonen oft einen eingeschränkten $PATH haben.
+# Lösung 3: subprocess.Popen() statt .run(). Popen schießt den Befehl ab und entkoppelt ihn 
+# vom Python-Skript ("Fire & Forget"), damit sich das System nicht selbst blockiert.
 # ------------------------------------------------------------------------------
 @app.route('/sys_reboot', methods=['POST'])
 @requires_auth
 def sys_reboot():
     print("Web-Kommando empfangen: System wird neu gestartet.")
     shutdown_event.set() 
-    threading.Timer(2.5, lambda: subprocess.run(["/usr/bin/sudo", "/bin/systemctl", "reboot"])).start()
+    
+    def delayed_reboot():
+        time.sleep(2.5)
+        # Popen startet den Befehl im Hintergrund, ohne auf das Ende zu warten.
+        subprocess.Popen(["/usr/bin/sudo", "-n", "/sbin/reboot"])
+        
+    threading.Thread(target=delayed_reboot, daemon=True).start()
     return "System startet neu. Bitte haben Sie einen Moment Geduld...", 200
 
 @app.route('/sys_shutdown', methods=['POST'])
@@ -1083,7 +1094,12 @@ def sys_reboot():
 def sys_shutdown():
     print("Web-Kommando empfangen: System fährt herunter.")
     shutdown_event.set() 
-    threading.Timer(2.5, lambda: subprocess.run(["/usr/bin/sudo", "/bin/systemctl", "poweroff"])).start()
+    
+    def delayed_shutdown():
+        time.sleep(2.5)
+        subprocess.Popen(["/usr/bin/sudo", "-n", "/sbin/poweroff"])
+        
+    threading.Thread(target=delayed_shutdown, daemon=True).start()
     return "System fährt herunter. Sie können den Strom in ca. 10 Sekunden sicher trennen.", 200
 
 
@@ -1117,9 +1133,9 @@ if __name__ == '__main__':
         shutdown_event.set()
     finally:
         # PÄDAGOGISCHER HINTERGRUND: Deadlock-Prävention (Verklemmung)
-        # Wenn wir das Skript beenden, wollen wir das Display löschen (Datenschutz).
-        # Aber: Wenn der Hintergrund-Loop gerade auf das Display schreibt, hält er das Lock.
-        # Mit 'timeout=2' verhindern wir, dass das Herunterfahren hier ewig blockiert!
+        # Wenn sudo reboot ausgelöst wird, sendet systemd ein SIGINT an unser Skript.
+        # So erreichen wir sicher diesen finally-Block, um das E-Paper vor dem
+        # Stromausfall in den Sleep-Modus zu schicken (verlängert die Lebensdauer enorm!).
         shutdown_event.set()
         if GPIO: GPIO.cleanup()
         
