@@ -20,13 +20,14 @@ Ressourcen-Sperren (Locks), Kryptographie (Hashing), Responsives Webdesign
 # 1. IMPORTS & HARDWARE-SETUP
 # ==============================================================================
 import sys
-import os            # Erweitert genutzt für System-Befehle wie reboot/poweroff
+import os            # Für Dateipfad-Operationen
 import time
 import datetime
 import json
 import threading     # Für asynchrone Prozesse (Hintergrund-Schleife)
 import socket        # Für Netzwerk-Timeouts
 import tempfile      # Für sicheres (atomares) Speichern von Dateien
+import subprocess    # Für absolute, sichere System-Aufrufe an das Linux-OS
 import webuntis      # Die offizielle WebUntis API-Schnittstelle
 from functools import wraps
 from flask import Flask, render_template_string, request, redirect, Response
@@ -502,7 +503,7 @@ def run_display_test_sequence():
         
     conf = get_cached_config()
     
-    # Hartcodierte Test-Daten, didaktisch orientiert an deinen Fächern
+    # Hartcodierte Test-Daten, didaktisch orientiert an deinen Unterrichtsfächern
     test_cases = [
         ( {"current": {"fach": "Geschichte", "lehrer": "Ab", "klasse": "9B", "zeit": "08:00 - 08:45", "stunde": "1. Std.", "status_code": None, "stunden_info": "Buch auf Seite 12 aufschlagen"},
            "next": {"fach": "Informatik", "lehrer": "Cd", "klasse": "11B", "zeit": "08:50 - 09:35", "stunde": "2. Std.", "status_code": None, "stunden_info": ""}}, "" ),
@@ -927,6 +928,7 @@ HTML_TEMPLATE = """
 
                     <div class="section-title">System</div>
                     <div class="btn-group">
+                        <!-- PÄDAGOGISCHER HINTERGRUND: onsubmit führt eine clientseitige JS-Validierung (confirm) aus -->
                         <form action="/sys_reboot" method="POST" class="inline-form btn-full" onsubmit="return confirm('Raspberry Pi wirklich neu starten? Das E-Paper wird kurz abgeschaltet.');">
                             <button type="submit" class="btn btn-test" style="background-color: #475569;">System Neustart</button>
                         </form>
@@ -1062,17 +1064,18 @@ def toggle_touch():
     return redirect('/')
 
 # ------------------------------------------------------------------------------
-# PÄDAGOGISCHER HINTERGRUND: System-Calls (OS-Level)
-# Diese Routinen zeigen, wie Python direkte Befehle an Linux (Raspberry Pi OS) sendet.
-# Wir nutzen asynchrone Timer, damit der Webserver noch eine HTTP-Erfolgsmeldung 
-# an den Browser zurückschicken kann, BEVOR er sich selbst den Stecker zieht.
+# PÄDAGOGISCHER HINTERGRUND: Absolute Pfade & Subprocess Modul
+# Daemons (wie systemd) haben beim Booten oft keine vollständigen Umgebungsvariablen ($PATH).
+# Ein einfaches os.system('sudo reboot') schlägt oft fehl, weil das Skript den Ort des 
+# Befehls nicht kennt. Wir nutzen daher das moderne 'subprocess' Modul und weisen Python 
+# an, exakt die absoluten Dateipfade /usr/bin/sudo und /bin/systemctl zu verwenden!
 # ------------------------------------------------------------------------------
 @app.route('/sys_reboot', methods=['POST'])
 @requires_auth
 def sys_reboot():
     print("Web-Kommando empfangen: System wird neu gestartet.")
     shutdown_event.set() 
-    threading.Timer(2.5, lambda: os.system("sudo reboot")).start()
+    threading.Timer(2.5, lambda: subprocess.run(["/usr/bin/sudo", "/bin/systemctl", "reboot"])).start()
     return "System startet neu. Bitte haben Sie einen Moment Geduld...", 200
 
 @app.route('/sys_shutdown', methods=['POST'])
@@ -1080,7 +1083,7 @@ def sys_reboot():
 def sys_shutdown():
     print("Web-Kommando empfangen: System fährt herunter.")
     shutdown_event.set() 
-    threading.Timer(2.5, lambda: os.system("sudo poweroff")).start()
+    threading.Timer(2.5, lambda: subprocess.run(["/usr/bin/sudo", "/bin/systemctl", "poweroff"])).start()
     return "System fährt herunter. Sie können den Strom in ca. 10 Sekunden sicher trennen.", 200
 
 
