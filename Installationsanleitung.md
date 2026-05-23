@@ -133,7 +133,7 @@ Der in Python integrierte Webserver (Waitress) wird ausschließlich an den Local
 
 ## **8\. Systemdienst (Autostart) einrichten**
 
-Damit das Programm bei einem Neustart des Raspberry Pi automatisch ausgeführt wird, wird ein systemd-Service angelegt.
+Damit das Programm bei einem Neustart des Raspberry Pi automatisch ausgeführt wird, wird ein systemd-Service angelegt. Aus Sicherheitsgründen (Principle of Least Privilege) läuft dieser Dienst **nicht** als Root, sondern als normaler Benutzer pi.
 
 1. **Service-Datei erstellen:**  
    sudo nano /etc/systemd/system/raumanzeige.service
@@ -160,5 +160,16 @@ Damit das Programm bei einem Neustart des Raspberry Pi automatisch ausgeführt w
    sudo systemctl daemon-reload  
    sudo systemctl enable raumanzeige.service  
    sudo systemctl start raumanzeige.service
+
+## **9\. Rechteverwaltung für das Webinterface (Sudoers)**
+
+Da der Webserver aus Sicherheitsgründen als unprivilegierter Benutzer (pi) läuft, kann er das System normalerweise nicht eigenständig über die Web-Buttons herunterfahren oder neustarten. Wir erteilen dem Nutzer pi daher gezielt eine "Ausnahmegenehmigung" für exakt diese beiden Befehle, ohne dass eine Passworteingabe (die das Skript blockieren würde) erforderlich ist.
+
+1. **Sudoers-Datei sicher bearbeiten:**  
+   sudo visudo /etc/sudoers.d/010\_pi-nopasswd
+
+2. **Folgende Zeile einfügen und speichern:**  
+   *(Wenn Sie einen anderen Benutzernamen als pi verwenden, passen Sie das erste Wort entsprechend an)*  
+   pi ALL=(ALL) NOPASSWD: /sbin/reboot, /sbin/poweroff
 
 Die Installation ist damit abgeschlossen. Das Administrations-Interface ist netzwerkintern unter der IP-Adresse des Raspberry Pi über HTTPS erreichbar (z. B. https://10.x.x.x). Browser-Warnungen bezüglich des selbstsignierten Zertifikats müssen für den Zugriff bestätigt werden.
