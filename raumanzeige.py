@@ -322,10 +322,6 @@ def get_current_lesson(conf):
         # PÄDAGOGISCHER HINTERGRUND: Ferien-Erkennung (Holidays API)
         # ----------------------------------------------------------------------
         try:
-            # PÄDAGOGISCH: Wir holen die Ferien für ALLE verfügbaren Schuljahre.
-            # Sommerferien liegen oft genau auf der Grenze zweier Schuljahre oder
-            # schon im "neuen" Schuljahr, weshalb eine Suche nach dem exakten 
-            # Tagesdatum (wie beim Osterferien-Bug) oft fehlschlägt.
             holidays = []
             try:
                 for sy in session.schoolyears():
@@ -354,14 +350,12 @@ def get_current_lesson(conf):
         except Exception as e:
             # PÄDAGOGISCHER HINTERGRUND: Edge-Case Schuljahreswechsel / DateNotAllowed
             # Wenn man das Datum in die Sommerferien simuliert (z.B. 20.07.2026),
-            # stürzt die timetable-Abfrage ab, da WebUntis den Kalender sperrt 
-            # (oft mit "DateNotAllowed" oder "no valid schoolyear").
-            # Anstatt "WebUntis offline" zu melden, fangen wir diesen Fehler elegant ab!
+            # stürzt die timetable-Abfrage ab, da WebUntis den Kalender sperrt.
             err_str = str(e).lower()
             if "schoolyear" in err_str or "schuljahr" in err_str or "no valid" in err_str or "date" in err_str or "notallowed" in err_str:
                 return {"current": None, "next": None}, "Unterrichtsfrei!\n(Ferienzeit)"
             
-            # Unbekannte Fehler loggen und weiterwerfen, damit sie im Except-Block unten landen
+            # Unbekannte Fehler loggen und weiterwerfen
             print(f"Unerwarteter WebUntis Stundenplan-Fehler: {e}")
             raise e
             
@@ -769,7 +763,7 @@ def requires_auth(f):
 # In großen Projekten lagert man HTML in einen /templates Ordner aus.
 # Für absolute Portabilität behalten wir das Template hier als String.
 # Die HTML-Struktur ist aufgeteilt: 1. Controls(Top), 2. Preview, 3. Controls(Bottom).
-# Dadurch fließt das Layout auf dem Smartphone (Flexbox 'column') in exakt dieser Reihenfolge.
+# Dadurch fließt das Layout auf Smartphone (Flexbox 'column') in exakt dieser Reihenfolge.
 # Auf dem Desktop greift das CSS Grid (@media) und ordnet die Controls links (1. und 2. Zeile) 
 # und die Preview rechts (über beide Zeilen gespannt) an.
 # ------------------------------------------------------------------------------
@@ -1136,6 +1130,7 @@ def toggle_touch():
 @app.route('/sys_reboot', methods=['POST'])
 @requires_auth
 def sys_reboot():
+    print("Web-Kommando empfangen: System wird neu gestartet.")
     shutdown_event.set() 
     
     def delayed_reboot():
@@ -1149,6 +1144,7 @@ def sys_reboot():
 @app.route('/sys_shutdown', methods=['POST'])
 @requires_auth
 def sys_shutdown():
+    print("Web-Kommando empfangen: System fährt herunter.")
     shutdown_event.set() 
     
     def delayed_shutdown():
