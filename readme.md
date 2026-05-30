@@ -42,7 +42,7 @@ Das Projekt baut auf einer Reihe von Systempaketen und Python-Bibliotheken auf:
 
 ## **🚀 Installation & Einrichtung**
 
-Eine vollständige, detaillierte Schritt-für-Schritt-Anleitung zur Einrichtung des Raspberry Pi, der Treiber und der Software finden Sie in der Datei [**Installationsanleitung.md**](http://docs.google.com/Installationsanleitung.md).
+Eine vollständige, detaillierte Schritt-für-Schritt-Anleitung zur Einrichtung des Raspberry Pi, der Treiber und der Software finden Sie in der Datei [**Installationsanleitung.md**](https://github.com/Obi-Wahn/WebUnits-eInk-Raumschild/blob/main/Installationsanleitung.md).
 
 ## **⚙️ Konfiguration**
 
