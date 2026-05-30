@@ -317,12 +317,54 @@ def get_current_lesson(conf):
         now = get_now()
         today = now.date()
         now_time = now.time()
+
+        # ----------------------------------------------------------------------
+        # PÄDAGOGISCHER HINTERGRUND: Ferien-Erkennung (Holidays API)
+        # ----------------------------------------------------------------------
+        try:
+            # PÄDAGOGISCH: Wir holen die Ferien für ALLE verfügbaren Schuljahre.
+            # Sommerferien liegen oft genau auf der Grenze zweier Schuljahre oder
+            # schon im "neuen" Schuljahr, weshalb eine Suche nach dem exakten 
+            # Tagesdatum (wie beim Osterferien-Bug) oft fehlschlägt.
+            holidays = []
+            try:
+                for sy in session.schoolyears():
+                    holidays.extend(session.holidays(schoolyear=sy))
+            except Exception:
+                # Fallback, falls die Iteration fehlschlägt
+                holidays = session.holidays()
+                
+            for holiday in holidays:
+                h_start = holiday.start.date() if isinstance(holiday.start, datetime.datetime) else holiday.start
+                h_end = holiday.end.date() if isinstance(holiday.end, datetime.datetime) else holiday.end
+                
+                if h_start <= today <= h_end:
+                    # Der Zeilenumbruch \n sorgt dafür, dass der Text bei langen
+                    # Feriennamen nicht rechts abgeschnitten wird.
+                    return {"current": None, "next": None}, f"Schöne Ferien!\n({holiday.name})"
+        except Exception as e:
+            print(f"Info: Ferien-API konnte nicht ausgelesen werden ({e})")
         
-        # Am Wochenende API-Schonung
+        # Am Wochenende (Samstag/Sonntag) API-Schonung
         if now.weekday() >= 5: 
             return {"current": None, "next": None}, "Schönes Wochenende!"
             
-        timetable = session.timetable(room=rooms[0], start=today, end=today)
+        try:
+            timetable = session.timetable(room=rooms[0], start=today, end=today)
+        except Exception as e:
+            # PÄDAGOGISCHER HINTERGRUND: Edge-Case Schuljahreswechsel / DateNotAllowed
+            # Wenn man das Datum in die Sommerferien simuliert (z.B. 20.07.2026),
+            # stürzt die timetable-Abfrage ab, da WebUntis den Kalender sperrt 
+            # (oft mit "DateNotAllowed" oder "no valid schoolyear").
+            # Anstatt "WebUntis offline" zu melden, fangen wir diesen Fehler elegant ab!
+            err_str = str(e).lower()
+            if "schoolyear" in err_str or "schuljahr" in err_str or "no valid" in err_str or "date" in err_str or "notallowed" in err_str:
+                return {"current": None, "next": None}, "Unterrichtsfrei!\n(Ferienzeit)"
+            
+            # Unbekannte Fehler loggen und weiterwerfen, damit sie im Except-Block unten landen
+            print(f"Unerwarteter WebUntis Stundenplan-Fehler: {e}")
+            raise e
+            
         if not timetable:
             return {"current": None, "next": None}, "Unterrichtsfrei"
             
@@ -480,9 +522,21 @@ def update_display_logic(data, message, conf):
                     draw.text((5, 74), "DANACH:", font=f_small, fill=0)
                     draw.text((5, 90), msg_text, font=f_reg, fill=0)
             else:
-                text_w = get_text_width(draw, message, f_mega)
-                x_pos = (250 - text_w) / 2 if text_w < 250 else 2
-                draw.text((x_pos, 60), message, font=f_mega, fill=0)
+                # PÄDAGOGISCH: Wir handhaben mehrzeilige Strings (\n),
+                # damit lange Texte (wie "Unterrichtsfrei!\n(Ferienzeit)") 
+                # zentriert auf das 250 Pixel schmale Display passen.
+                if "\n" in message:
+                    lines = message.split("\n")
+                    y_pos = 45
+                    for line in lines:
+                        text_w = get_text_width(draw, line, f_mega)
+                        x_pos = (250 - text_w) / 2 if text_w < 250 else 2
+                        draw.text((x_pos, y_pos), line, font=f_mega, fill=0)
+                        y_pos += 24 # Fester Zeilenabstand für die 2. Zeile
+                else:
+                    text_w = get_text_width(draw, message, f_mega)
+                    x_pos = (250 - text_w) / 2 if text_w < 250 else 2
+                    draw.text((x_pos, 60), message, font=f_mega, fill=0)
 
             # Das fertige Bitmap an den E-Paper-Controller senden
             epd.display(epd.getbuffer(image))
@@ -515,6 +569,7 @@ def run_display_test_sequence():
         ( {"current": {"fach": "Werte u. Normen", "lehrer": "Gk", "klasse": "8C", "zeit": "11:45 - 12:30", "stunde": "5. Std.", "status_code": "irregular", "stunden_info": "Achtung: Raumänderung nach In2"},
            "next": None}, "" ),
         
+        ( None, "Unterrichtsfrei!\n(Ferienzeit)" ),
         ( None, "Schönes Wochenende!" ),
         ( None, "Kein WLAN/Internet" )
     ]
@@ -639,7 +694,9 @@ def background_loop():
                     current_display_msg = err
 
                 current_date = current_dt.strftime("%Y-%m-%d")
-                is_static_day = err in ["Schönes Wochenende!", "Unterrichtsfrei"]
+                
+                # Update der statischen Tage: Jetzt auch prüfen, ob das Wort "Ferien" im Text steckt
+                is_static_day = err in ["Schönes Wochenende!", "Unterrichtsfrei"] or (isinstance(err, str) and "Ferien" in err)
                 
                 skip_update = False
                 if is_static_day and not is_manual:
@@ -707,6 +764,7 @@ def requires_auth(f):
         return f(*args, **kwargs)
     return decorated
 
+# ------------------------------------------------------------------------------
 # PÄDAGOGISCHER HINTERGRUND (HTML Inline, CSS Flexbox & CSS Grid):
 # In großen Projekten lagert man HTML in einen /templates Ordner aus.
 # Für absolute Portabilität behalten wir das Template hier als String.
@@ -714,6 +772,7 @@ def requires_auth(f):
 # Dadurch fließt das Layout auf dem Smartphone (Flexbox 'column') in exakt dieser Reihenfolge.
 # Auf dem Desktop greift das CSS Grid (@media) und ordnet die Controls links (1. und 2. Zeile) 
 # und die Preview rechts (über beide Zeilen gespannt) an.
+# ------------------------------------------------------------------------------
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="de">
@@ -897,7 +956,9 @@ HTML_TEMPLATE = """
                             {% endif %}
                             
                         {% else %}
-                            <div class="empty-state" style="font-size: 16px; padding: 30px 20px;">{{ msg }}</div>
+                            <div class="empty-state" style="font-size: 16px; padding: 30px 20px;">
+                                {{ msg | replace('\n', '<br>') | safe }}
+                            </div>
                         {% endif %}
                     </div>
                 </div>
@@ -926,6 +987,7 @@ HTML_TEMPLATE = """
 
                     <div class="section-title">System</div>
                     <div class="btn-group">
+                        <!-- PÄDAGOGISCHER HINTERGRUND: onsubmit führt eine clientseitige JS-Validierung (confirm) aus -->
                         <form action="/sys_reboot" method="POST" class="inline-form btn-full" onsubmit="return confirm('Raspberry Pi wirklich neu starten? Das E-Paper wird kurz abgeschaltet.');">
                             <button type="submit" class="btn btn-test" style="background-color: #475569;">System Neustart</button>
                         </form>
@@ -1074,7 +1136,6 @@ def toggle_touch():
 @app.route('/sys_reboot', methods=['POST'])
 @requires_auth
 def sys_reboot():
-    print("Web-Kommando empfangen: System wird neu gestartet.")
     shutdown_event.set() 
     
     def delayed_reboot():
@@ -1088,7 +1149,6 @@ def sys_reboot():
 @app.route('/sys_shutdown', methods=['POST'])
 @requires_auth
 def sys_shutdown():
-    print("Web-Kommando empfangen: System fährt herunter.")
     shutdown_event.set() 
     
     def delayed_shutdown():
@@ -1120,6 +1180,7 @@ if __name__ == '__main__':
         threading.Thread(target=background_loop, daemon=True).start()
             
         print(f" * Admin-Interface (Localhost): http://127.0.0.1:5000")
+        
         # PÄDAGOGISCHER HINTERGRUND (WSGI vs Proxy): 
         # Flask's eigener 'app.run()' Server ist nicht für echte Netzwerke gedacht. 
         # Waitress wickelt als WSGI-Server die Python-HTTP-Requests performant ab.
