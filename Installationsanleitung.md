@@ -35,7 +35,7 @@ Erstellen Sie das Arbeitsverzeichnis und laden Sie die benötigten Hardware-Trei
 cd \~  
 mkdir webuntis-display  
 cd webuntis-display  
-git clone \[https://github.com/waveshareteam/e-Paper.git\](https://github.com/waveshareteam/e-Paper.git)
+git clone [https://github.com/waveshareteam/e-Paper.git](https://github.com/waveshareteam/e-Paper.git)
 
 ## **4\. Python-Umgebung einrichten**
 
