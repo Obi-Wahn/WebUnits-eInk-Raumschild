@@ -28,12 +28,24 @@ import threading     # Für asynchrone Prozesse (Hintergrund-Schleife)
 import socket        # Für Netzwerk-Timeouts
 import tempfile      # Für sicheres (atomares) Speichern von Dateien
 import subprocess    # Für sichere System-Aufrufe an das Linux-OS
+import logging       # Professionelles System-Logging
 import webuntis      # Die offizielle WebUntis API-Schnittstelle
 from functools import wraps
 from flask import Flask, render_template_string, request, redirect, Response
 from waitress import serve  # Ein sicherer, produktionsreifer WSGI-Webserver
 from werkzeug.security import generate_password_hash, check_password_hash # Kryptographie
 from PIL import Image, ImageDraw, ImageFont # Pillow: Für die Bildgenerierung
+
+# ------------------------------------------------------------------------------
+# LOGGING KONFIGURATION
+# ------------------------------------------------------------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
 
 # ------------------------------------------------------------------------------
 # Hardware-Schnittstellen (GPIO & I2C) laden. 
@@ -46,14 +58,14 @@ from PIL import Image, ImageDraw, ImageFont # Pillow: Für die Bildgenerierung
 try:
     import RPi.GPIO as GPIO
 except ImportError as e:
-    print(f"Warnung: RPi.GPIO ist nicht installiert. Entwicklungsmodus? ({e})")
+    logging.warning(f"RPi.GPIO ist nicht installiert. Entwicklungsmodus? ({e})")
     GPIO = None
 
 try:
     import smbus2 as smbus
     i2c_bus = smbus.SMBus(1)
 except ImportError as e:
-    print(f"Warnung: smbus2 ist nicht installiert. Entwicklungsmodus? ({e})")
+    logging.warning(f"smbus2 ist nicht installiert. Entwicklungsmodus? ({e})")
     smbus = None
     i2c_bus = None
 
@@ -65,7 +77,7 @@ if os.path.exists(libdir):
 try:
     from waveshare_epd import epd2in13_V3
 except ImportError as e:
-    print(f"Warnung: waveshare_epd Treiber nicht gefunden. ({e})")
+    logging.warning(f"waveshare_epd Treiber nicht gefunden. ({e})")
     epd2in13_V3 = None
 
 
@@ -81,10 +93,10 @@ TOUCH_I2C_ADDR = 0x14                # Hexadezimale Adresse des Touch-Controller
 TOUCH_COOLDOWN = 5.0                 # Entprell-Zeit für das Touch-Display in Sekunden
 
 # Steuerungsvariablen für die Kommunikation zwischen Webserver und Hintergrund-Loop
-force_update_flag = True             # Startet auf True, damit beim Booten direkt ein Update erfolgt
-show_demo_once = False               # Schalter für den Präsentations-Modus (zeigt simulierte Daten)
-test_mode_active = False             # Blockiert reguläre Updates, solange der Display-Test läuft
-shutdown_event = threading.Event()   # Thread-sicheres Signal zum sauberen Beenden des Programms (STRG+C)
+force_update_flag = True             
+show_demo_once = False               
+test_mode_active = False             
+shutdown_event = threading.Event()   
 
 # ------------------------------------------------------------------------------
 # THREADING-LOCKS (Schutz vor "Race Conditions")
@@ -95,21 +107,25 @@ shutdown_event = threading.Event()   # Thread-sicheres Signal zum sauberen Beend
 # Fehlen die Locks, entstehen "Race Conditions", bei denen Variablen mit 
 # inkonsistenten Werten überschrieben werden oder das SPI-Display abstürzt.
 # ------------------------------------------------------------------------------
-display_lock = threading.Lock()      # Schützt das Hardware-Display vor simultanen Schreibzugriffen
-state_lock = threading.Lock()        # Schützt unsere globalen Steuerungs-Flags
-config_lock = threading.Lock()       # Schützt das Lesen/Schreiben der Konfigurationsdatei
+display_lock = threading.Lock()      
+state_lock = threading.Lock()        
+config_lock = threading.Lock()       
 
 # Variablen für die Zeit-Simulation (Time-Travel-Feature für das Testen im Webinterface)
 simulated_datetime = None
 
-# Globaler Cache, damit das Webinterface nicht bei jedem Neuladen die API abfragt
+# Caches
 current_display_data = None
 current_display_msg = "Warte auf erstes Update..."
 
-# Performance-Caching für Dateien
 _cached_config = {}
 _last_config_mtime = 0
 GLOBAL_FONTS = {}
+
+# Ferien-Caching zur Performance-Steigerung
+_cached_holidays = None
+_last_holidays_fetch = 0
+HOLIDAYS_CACHE_SECONDS = 86400  # 24 Stunden (86400 Sekunden)
 
 
 # ==============================================================================
@@ -125,7 +141,6 @@ def get_cached_config():
     Hintergrund-Loop in exakt derselben Millisekunde auf die Datei zugreifen wollen.
     """
     global _cached_config, _last_config_mtime
-    
     with config_lock:
         if not os.path.exists(CONFIG_FILE): return {}
         try:
@@ -136,9 +151,7 @@ def get_cached_config():
                     _cached_config = json.loads(content) if content else {}
                 _last_config_mtime = mtime
         except Exception as e:
-            print(f"FEHLER beim Laden der config.json: {e}")
-        
-        # Ein echtes Dictionary als Kopie zurückgeben, um Pointer-Probleme zu vermeiden
+            logging.error(f"FEHLER beim Laden der config.json: {e}")
         return dict(_cached_config)
 
 def save_config(config):
@@ -151,7 +164,6 @@ def save_config(config):
     und tauschen sie am Ende nahtlos (atomar) auf Betriebssystemebene aus.
     """
     global _last_config_mtime
-    
     with config_lock:
         try:
             dir_name = os.path.dirname(CONFIG_FILE)
@@ -159,19 +171,19 @@ def save_config(config):
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=4, ensure_ascii=False)
             os.replace(temp_path, CONFIG_FILE)
-            
-            # Den RAM-Cache sofort invalidieren
             _last_config_mtime = 0 
         except Exception as e:
-            print(f"FEHLER beim Speichern der config.json: {e}")
-
+            logging.error(f"FEHLER beim Speichern der config.json: {e}")
 
 # ==============================================================================
 # 3.5 ZENTRALE UHR (Abstraktion der Zeit für Testzwecke)
 # ==============================================================================
 def get_now() -> datetime.datetime:
     """
-    Gibt das aktuelle Datum/Uhrzeit zurück (inklusive Simulations-Logik).
+    Gibt das aktuelle Datum/Uhrzeit zurück.
+    PÄDAGOGISCH: Wir kapseln (abstrahieren) die Zeit-Logik, damit wir 
+    aus dem Web-Interface bequem "in die Zukunft" reisen können, um 
+    bestimmte Randfälle (z.B. Ferien) zu testen.
     """
     global simulated_datetime
     with state_lock:
@@ -198,7 +210,7 @@ def init_fonts():
         GLOBAL_FONTS['reg'] = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 12)
         GLOBAL_FONTS['small'] = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 11)
     except Exception as e:
-        print(f"Schriftarten nicht gefunden, nutze Fallback. ({e})")
+        logging.warning(f"Schriftarten nicht gefunden, nutze Fallback. ({e})")
         default = ImageFont.load_default()
         GLOBAL_FONTS = {k: default for k in ['mega', 'huge', 'large', 'med', 'reg', 'small']}
 
@@ -225,7 +237,7 @@ def clear_touch_interrupt_via_i2c():
     try: 
         i2c_bus.write_i2c_block_data(TOUCH_I2C_ADDR, 0x81, [0x4E, 0x00])
     except Exception as e: 
-        print(f"I2C Reset Fehler: {e}")
+        logging.warning(f"I2C Reset Fehler: {e}")
 
 def clear_display_once():
     """Löscht das E-Paper-Display komplett weiß."""
@@ -239,7 +251,7 @@ def clear_display_once():
             epd.Clear(0xFF)
             epd.sleep()
         except Exception as e: 
-            print(f"Display Clear Fehler: {e}")
+            logging.error(f"Display Clear Fehler: {e}")
 
 
 # ==============================================================================
@@ -250,7 +262,6 @@ def parse_lesson(lesson, conf):
     Hilfsfunktion: Nimmt ein komplexes, rohes WebUntis-Klassenobjekt und 
     extrahiert genau die Strings, die wir für das Display brauchen.
     """
-    # Sicherheit (Input Validation): Falls ein kaputtes Objekt übergeben wird
     if not lesson or not getattr(lesson, 'start', None) or not getattr(lesson, 'end', None): 
         return None
     
@@ -288,17 +299,15 @@ def parse_lesson(lesson, conf):
 
 def get_current_lesson(conf):
     """Verbindet sich mit der WebUntis-API, holt den Tagesplan und filtert ihn."""
-    
-    # Input Validation: Niemals API-Calls starten, wenn Pflichtdaten fehlen!
     req_keys = ['UNTIS_SERVER', 'UNTIS_USER', 'UNTIS_PASS', 'UNTIS_SCHOOL', 'ROOM_NAME']
     if not conf or any(not conf.get(k) for k in req_keys):
         return None, "Konfiguration unvollständig."
     
+    # Lokaler Socket-Timeout (Best Practice, damit nicht das gesamte System hängt)
+    old_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(30)
+    
     session = None
-    # HINWEIS: python-webuntis unterstützt nativ keinen Timeout-Parameter. 
-    # Wir setzen daher notgedrungen den globalen Socket-Timeout, um bei WLAN-Ausfällen
-    # Endlos-Hänger zu vermeiden.
-    socket.setdefaulttimeout(30) 
     
     try:
         session = webuntis.Session(
@@ -319,27 +328,39 @@ def get_current_lesson(conf):
         now_time = now.time()
 
         # ----------------------------------------------------------------------
-        # PÄDAGOGISCHER HINTERGRUND: Ferien-Erkennung (Holidays API)
+        # PÄDAGOGISCHER HINTERGRUND: Ferien-Erkennung mit Performance-Cache
+        # Da sich Ferien (hoffentlich!) nicht stündlich ändern, sparen wir 
+        # API-Aufrufe, indem wir die Daten für 24 Stunden (86400s) im RAM cachen.
+        # Zudem iterieren wir absichtlich über ALLE Schuljahre, da z.B. Sommerferien
+        # exakt zwischen zwei Schuljahren liegen und sonst oft nicht erkannt werden.
         # ----------------------------------------------------------------------
-        try:
+        global _cached_holidays, _last_holidays_fetch
+        now_ts = time.time()
+        
+        if _cached_holidays is not None and (now_ts - _last_holidays_fetch) < HOLIDAYS_CACHE_SECONDS:
+            holidays = _cached_holidays
+        else:
             holidays = []
             try:
                 for sy in session.schoolyears():
                     holidays.extend(session.holidays(schoolyear=sy))
-            except Exception:
-                # Fallback, falls die Iteration fehlschlägt
-                holidays = session.holidays()
+                _cached_holidays = holidays
+                _last_holidays_fetch = now_ts
+            except Exception as e:
+                logging.warning(f"Ferien-API Iteration fehlgeschlagen: {e}")
+                try:
+                    holidays = session.holidays()
+                    _cached_holidays = holidays
+                    _last_holidays_fetch = now_ts
+                except Exception:
+                    pass
                 
-            for holiday in holidays:
-                h_start = holiday.start.date() if isinstance(holiday.start, datetime.datetime) else holiday.start
-                h_end = holiday.end.date() if isinstance(holiday.end, datetime.datetime) else holiday.end
-                
-                if h_start <= today <= h_end:
-                    # Der Zeilenumbruch \n sorgt dafür, dass der Text bei langen
-                    # Feriennamen nicht rechts abgeschnitten wird.
-                    return {"current": None, "next": None}, f"Schöne Ferien!\n({holiday.name})"
-        except Exception as e:
-            print(f"Info: Ferien-API konnte nicht ausgelesen werden ({e})")
+        for holiday in holidays:
+            h_start = holiday.start.date() if isinstance(holiday.start, datetime.datetime) else holiday.start
+            h_end = holiday.end.date() if isinstance(holiday.end, datetime.datetime) else holiday.end
+            
+            if h_start <= today <= h_end:
+                return {"current": None, "next": None}, f"Schöne Ferien!\n({holiday.name})"
         
         # Am Wochenende (Samstag/Sonntag) API-Schonung
         if now.weekday() >= 5: 
@@ -350,13 +371,14 @@ def get_current_lesson(conf):
         except Exception as e:
             # PÄDAGOGISCHER HINTERGRUND: Edge-Case Schuljahreswechsel / DateNotAllowed
             # Wenn man das Datum in die Sommerferien simuliert (z.B. 20.07.2026),
-            # stürzt die timetable-Abfrage ab, da WebUntis den Kalender sperrt.
+            # stürzt die timetable-Abfrage ab, da WebUntis den Kalender hart sperrt 
+            # (mit "DateNotAllowed" oder "no valid schoolyear").
+            # Anstatt fehlerhaft "WebUntis offline" zu melden, fangen wir dies elegant ab!
             err_str = str(e).lower()
             if "schoolyear" in err_str or "schuljahr" in err_str or "no valid" in err_str or "date" in err_str or "notallowed" in err_str:
                 return {"current": None, "next": None}, "Unterrichtsfrei!\n(Ferienzeit)"
             
-            # Unbekannte Fehler loggen und weiterwerfen
-            print(f"Unerwarteter WebUntis Stundenplan-Fehler: {e}")
+            logging.error(f"Unerwarteter WebUntis Stundenplan-Fehler: {e}")
             raise e
             
         if not timetable:
@@ -401,7 +423,7 @@ def get_current_lesson(conf):
                             message = b.get("name", "Pause")
                             break
             except Exception as e:
-                print(f"Zeit-Parsing Fehler: {e}")
+                logging.warning(f"Zeit-Parsing Fehler: {e}")
                 message = "Raum ist frei"
 
         return {
@@ -410,10 +432,11 @@ def get_current_lesson(conf):
         }, message
         
     except Exception as e:
-        # PÄDAGOGISCHER HINTERGRUND: Graceful Degradation
-        # Sprechende Fehlermeldungen für das E-Paper, wenn z.B. das WLAN wegbricht.
+        # PÄDAGOGISCHER HINTERGRUND: Graceful Degradation (Gutmütiges Herabstufen)
+        # Wir fangen Netzwerkfehler dediziert ab und geben sprechende 
+        # Fehlermeldungen für das E-Paper zurück, wenn z.B. das WLAN wegbricht.
         error_msg = str(e)
-        print(f"WebUntis API Fehler: {error_msg}")
+        logging.error(f"WebUntis API Fehler: {error_msg}")
         if "HTTPSConnectionPool" in error_msg or "NameResolutionError" in error_msg or "Max retries" in error_msg or "timeout" in error_msg.lower():
             return None, "Kein WLAN/Internet"
         elif "LoginError" in error_msg or "Unauthorized" in error_msg:
@@ -421,6 +444,7 @@ def get_current_lesson(conf):
         else:
             return None, "WebUntis offline"
     finally:
+        socket.setdefaulttimeout(old_timeout)
         if session:
             try: session.logout()
             except Exception: pass
@@ -430,10 +454,7 @@ def get_current_lesson(conf):
 # 6. DARSTELLUNGS-EBENE: E-PAPER LAYOUT & CANVAS
 # ==============================================================================
 def get_text_width(draw, text, font):
-    """
-    Hilfsfunktion zur Abwärtskompatibilität für verschiedene Pillow-Versionen.
-    Vermeidet Abstürze auf älteren oder brandneuen Betriebssystemen.
-    """
+    """Hilfsfunktion zur Kompatibilität über verschiedene Pillow-Versionen hinweg."""
     try: return draw.textlength(text, font=font) 
     except AttributeError:
         try: return draw.textbbox((0,0), text, font=font)[2] 
@@ -447,20 +468,17 @@ def draw_lesson_block(draw, lesson_data, y_offset, label_text, f_small, f_reg, f
     status = lesson_data.get('status_code')
     y_content = y_offset + 16
     
-    # Priorität 1: Ausfall (Invertierter schwarzer Block für hohe Sichtbarkeit)
     if status == 'cancelled':
         draw.rectangle((5, y_content, 85, y_content + 18), fill=0)
         draw.text((8, y_content+2), "FÄLLT AUS", font=f_small, fill=255) 
         draw.text((90, y_content), f"{lesson_data['klasse']}", font=f_reg, fill=0)
         
-    # Priorität 2: Vertretung (Invertiertes Label)
     elif status == 'irregular':
         draw.rectangle((5, y_content, 90, y_content + 18), fill=0)
         draw.text((8, y_content+2), "VERTRETUNG", font=f_small, fill=255)
         main_info = f"{lesson_data['fach']} | {lesson_data['klasse']} ({lesson_data['lehrer']})"
         draw.text((95, y_content), main_info, font=f_reg, fill=0)
         
-    # Standard-Darstellung
     else:
         main_info = f"{lesson_data['fach']} | {lesson_data['klasse']} ({lesson_data['lehrer']})"
         draw.text((5, y_content), main_info, font=f_reg, fill=0)
@@ -471,7 +489,7 @@ def update_display_logic(data, message, conf):
     message = message or "" 
 
     if epd2in13_V3 is None: 
-        print(f"INFO: Display-Update (Simulation): {message}")
+        logging.info(f"Display-Update (Simulation): {message}")
         return
         
     with display_lock: 
@@ -491,13 +509,13 @@ def update_display_logic(data, message, conf):
 
             now = get_now()
             
-            # KOPFZEILE
+            # Kopfzeile
             draw.rectangle((0, 0, 250, 24), fill=0)
             draw.text((5, 3), conf.get('ROOM_NAME', 'Unbekannt'), font=f_med, fill=255)
             time_str = now.strftime("%d.%m.%Y %H:%M")
             draw.text((120, 5), time_str, font=f_small, fill=255)
 
-            # HAUPTBEREICH
+            # Hauptbereich
             if data and isinstance(data, dict) and (data.get('current') or data.get('next')):
                 curr_lesson = data.get('current')
                 next_lesson = data.get('next')
@@ -516,7 +534,7 @@ def update_display_logic(data, message, conf):
                     draw.text((5, 74), "DANACH:", font=f_small, fill=0)
                     draw.text((5, 90), msg_text, font=f_reg, fill=0)
             else:
-                # PÄDAGOGISCH: Wir handhaben mehrzeilige Strings (\n),
+                # PÄDAGOGISCHER HINTERGRUND: Wir handhaben mehrzeilige Strings (\n),
                 # damit lange Texte (wie "Unterrichtsfrei!\n(Ferienzeit)") 
                 # zentriert auf das 250 Pixel schmale Display passen.
                 if "\n" in message:
@@ -526,18 +544,17 @@ def update_display_logic(data, message, conf):
                         text_w = get_text_width(draw, line, f_mega)
                         x_pos = (250 - text_w) / 2 if text_w < 250 else 2
                         draw.text((x_pos, y_pos), line, font=f_mega, fill=0)
-                        y_pos += 24 # Fester Zeilenabstand für die 2. Zeile
+                        y_pos += 24 
                 else:
                     text_w = get_text_width(draw, message, f_mega)
                     x_pos = (250 - text_w) / 2 if text_w < 250 else 2
                     draw.text((x_pos, 60), message, font=f_mega, fill=0)
 
-            # Das fertige Bitmap an den E-Paper-Controller senden
+            # WICHTIG: Das Display am Ende immer schlafen legen, um es zu schonen!
             epd.display(epd.getbuffer(image))
-            # WICHTIG: Display schlafen legen, um Lebensdauer zu erhalten und Strom zu sparen
             epd.sleep()
         except Exception as e:
-            print(f"Hardware-Fehler (Display): {e}")
+            logging.error(f"Hardware-Fehler (Display): {e}")
 
 
 # ==============================================================================
@@ -552,7 +569,6 @@ def run_display_test_sequence():
         
     conf = get_cached_config()
     
-    # Hartcodierte Test-Daten, didaktisch orientiert an deinen Fächern
     test_cases = [
         ( {"current": {"fach": "Geschichte", "lehrer": "Ab", "klasse": "9B", "zeit": "08:00 - 08:45", "stunde": "1. Std.", "status_code": None, "stunden_info": "Buch auf Seite 12 aufschlagen"},
            "next": {"fach": "Informatik", "lehrer": "Cd", "klasse": "11B", "zeit": "08:50 - 09:35", "stunde": "2. Std.", "status_code": None, "stunden_info": ""}}, "" ),
@@ -575,9 +591,6 @@ def run_display_test_sequence():
             current_display_msg = f"TESTLAUF ({idx+1}/{len(test_cases)})..."
         
         update_display_logic(data, msg, conf)
-        
-        # PÄDAGOGISCHER HINTERGRUND: shutdown_event.wait(4) statt time.sleep(4).
-        # Schützt vor Blockaden beim Herunterfahren des Programms (Graceful Exit).
         shutdown_event.wait(4) 
         
     with state_lock:
@@ -647,14 +660,9 @@ def background_loop():
         except Exception:
             is_active_hours = True 
 
-        # Logik: Haben wir einen exakten Treffer oder ist der Intervall abgelaufen?
-        is_exact_time = (current_hm in dyn_update_times) and (last_minute_triggered != current_hm)
-        is_interval_reached = (now_time_system - last_update >= conf.get('AUTO_UPDATE_SECONDS', 900)) and is_active_hours
-
-        # Hardware Touch-Logik
         if conf.get('TOUCH_ACTIVE', True) and check_touch_via_i2c():
             if now_time_system - last_touch_time > TOUCH_COOLDOWN:
-                print(f"\n[TOUCH {datetime.datetime.now().strftime('%H:%M:%S')}] Display beruehrt! Update wird vorbereitet...")
+                logging.info(f"Display beruehrt! Update wird vorbereitet...")
                 with state_lock:
                     force_update_flag = True
             last_touch_time = now_time_system
@@ -663,9 +671,11 @@ def background_loop():
             current_force_update = force_update_flag
             current_show_demo = show_demo_once
 
+        is_exact_time = (current_hm in dyn_update_times) and (last_minute_triggered != current_hm)
+        is_interval_reached = (now_time_system - last_update >= conf.get('AUTO_UPDATE_SECONDS', 900)) and is_active_hours
+
         if current_force_update or is_interval_reached or is_exact_time:
             if is_exact_time: last_minute_triggered = current_hm 
-            
             is_manual = current_force_update 
             
             with state_lock:
@@ -689,7 +699,6 @@ def background_loop():
 
                 current_date = current_dt.strftime("%Y-%m-%d")
                 
-                # Update der statischen Tage: Jetzt auch prüfen, ob das Wort "Ferien" im Text steckt
                 is_static_day = err in ["Schönes Wochenende!", "Unterrichtsfrei"] or (isinstance(err, str) and "Ferien" in err)
                 
                 skip_update = False
@@ -716,21 +725,17 @@ def background_loop():
 # ==============================================================================
 def check_auth(username, password):
     """
-    Überprüft die Benutzerdaten und hasht Passwörter bei Bedarf transparent.
-    
     PÄDAGOGISCHER HINTERGRUND (Kryptographie):
-    Passwörter niemals im Klartext speichern! Wir nutzen 'werkzeug.security', 
-    um das Klartext-Passwort aus der config.json einmalig in einen Einweg-Hash 
-    (scrypt/pbkdf2) umzuwandeln. Selbst wenn die SD-Karte ausgelesen wird, 
-    kann man das Passwort nicht mehr zurückrechnen.
+    Passwörter niemals im Klartext speichern! Wir wandeln das Klartext-Passwort 
+    aus der config.json einmalig in einen Einweg-Hash (scrypt/pbkdf2) um. 
+    Selbst wenn Hacker die SD-Karte stehlen, können sie das Passwort nicht lesen.
     """
     conf = get_cached_config()
     u = conf.get('ADMIN_USER', 'admin')
     saved_pass = conf.get('ADMIN_PASS', 'tuerschild')
     
     if not saved_pass.startswith('scrypt:') and not saved_pass.startswith('pbkdf2:'):
-        # Auto-Hashing: Das Passwort liegt noch unverschlüsselt vor.
-        print("INFO: Klartext-Passwort entdeckt. Wird verschlüsselt und gespeichert...")
+        logging.info("Klartext-Passwort entdeckt. Wird verschlüsselt und gespeichert...")
         hashed_pass = generate_password_hash(saved_pass)
         conf['ADMIN_PASS'] = hashed_pass
         save_config(conf)
@@ -745,10 +750,9 @@ def authenticate():
 
 def requires_auth(f):
     """
-    Decorator für alle geschützten URLs. Verhindert unberechtigten Zugriff.
-    PÄDAGOGISCHER HINTERGRUND: Decorator (das @-Symbol) wrappen eine Funktion.
+    PÄDAGOGISCHER HINTERGRUND: Ein "Decorator" (das @-Symbol) wrappt eine Funktion.
     Bevor Flask die Route (z.B. /save) ausführt, läuft erst dieser Code ab,
-    der das Passwort prüft.
+    der z.B. das Passwort prüft, ohne dass wir ihn überall wiederholen müssen.
     """
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -760,12 +764,10 @@ def requires_auth(f):
 
 # ------------------------------------------------------------------------------
 # PÄDAGOGISCHER HINTERGRUND (HTML Inline, CSS Flexbox & CSS Grid):
-# In großen Projekten lagert man HTML in einen /templates Ordner aus.
-# Für absolute Portabilität behalten wir das Template hier als String.
 # Die HTML-Struktur ist aufgeteilt: 1. Controls(Top), 2. Preview, 3. Controls(Bottom).
-# Dadurch fließt das Layout auf Smartphone (Flexbox 'column') in exakt dieser Reihenfolge.
-# Auf dem Desktop greift das CSS Grid (@media) und ordnet die Controls links (1. und 2. Zeile) 
-# und die Preview rechts (über beide Zeilen gespannt) an.
+# Dadurch fließt das Layout auf dem Smartphone (Flexbox 'column') genau in dieser 
+# logischen Reihenfolge. Auf dem Desktop greift das CSS Grid (@media) und ordnet 
+# die Controls links (1. und 2. Zeile) und die Preview rechts daneben an.
 # ------------------------------------------------------------------------------
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -981,11 +983,18 @@ HTML_TEMPLATE = """
 
                     <div class="section-title">System</div>
                     <div class="btn-group">
-                        <!-- PÄDAGOGISCHER HINTERGRUND: onsubmit führt eine clientseitige JS-Validierung (confirm) aus -->
+                        <!-- PÄDAGOGISCHER HINTERGRUND (Prinzip der geringsten Privilegien / PoLP & CSRF-Sicherheit): 
+                             1. sudoers: Wir konfigurieren Linux so, dass nur die Befehle 'reboot' und 'poweroff' 
+                                ohne Passwort ausgeführt werden dürfen.
+                             2. CSRF-Schutz (Cross-Site Request Forgery): Wir senden einen versteckten 
+                                Token (confirm_action) mit. Nur wenn dieser auf dem Server validiert 
+                                wird, darf der sudo-Befehl laufen. Das verhindert unautorisierte Reboots. -->
                         <form action="/sys_reboot" method="POST" class="inline-form btn-full" onsubmit="return confirm('Raspberry Pi wirklich neu starten? Das E-Paper wird kurz abgeschaltet.');">
+                            <input type="hidden" name="confirm_action" value="yes">
                             <button type="submit" class="btn btn-test" style="background-color: #475569;">System Neustart</button>
                         </form>
                         <form action="/sys_shutdown" method="POST" class="inline-form btn-full" onsubmit="return confirm('ACHTUNG: Raspberry Pi wirklich herunterfahren? Er muss danach manuell vom Strom getrennt und wieder verbunden werden, um neu zu starten!');">
+                            <input type="hidden" name="confirm_action" value="yes">
                             <button type="submit" class="btn btn-off" style="background-color: #94a3b8; color: #0f172a;">System Herunterfahren</button>
                         </form>
                     </div>
@@ -1013,7 +1022,6 @@ def index():
         
     display_time = get_now().strftime("%d.%m.%Y %H:%M:%S")
 
-    # Jinja2-Template-Engine füllt unsere HTML-Vorlage mit den aktuellen Variablen auf
     return render_template_string(
         HTML_TEMPLATE, 
         conf=conf, 
@@ -1035,7 +1043,7 @@ def simulate_time():
                 simulated_datetime = parsed_time
                 force_update_flag = True
         except Exception as e:
-            print(f"Fehler beim Parsen der Simulationszeit: {e}")
+            logging.error(f"Fehler beim Parsen der Simulationszeit: {e}")
     return redirect('/')
 
 @app.route('/reset_time', methods=['POST'])
@@ -1116,26 +1124,17 @@ def toggle_touch():
             force_update_flag = True
     return redirect('/')
 
-# ------------------------------------------------------------------------------
-# PÄDAGOGISCHER HINTERGRUND: "Principle of Least Privilege" & Sudoers
-# Ein Webserver sollte NIE als root (Super-Administrator) laufen. Wenn Hacker 
-# eindringen, hätten sie sonst sofort die volle Kontrolle über das ganze System!
-# Wir nutzen daher wieder den normalen, eingeschränkten User 'pi'.
-# Damit dieser User dennoch den Pi per Web-Button neustarten kann, konfigurieren 
-# wir Linux (in der Datei /etc/sudoers) so, dass der User 'pi' ausnahmsweise 
-# genau diesen EINEN Befehl mit 'sudo' ausführen darf, OHNE nach einem Passwort 
-# gefragt zu werden. Die Flag '-n' stellt hierbei nochmal sicher, dass sudo 
-# im Hintergrund nicht unsichtbar nach einem Passwort verlangt und blockiert.
-# ------------------------------------------------------------------------------
 @app.route('/sys_reboot', methods=['POST'])
 @requires_auth
 def sys_reboot():
-    print("Web-Kommando empfangen: System wird neu gestartet.")
+    if request.form.get('confirm_action', '').lower() != 'yes':
+        return "Bestätigung fehlgeschlagen (Sicherheitsrichtlinie)", 400
+
+    logging.info("Web-Kommando empfangen: System wird neu gestartet.")
     shutdown_event.set() 
     
     def delayed_reboot():
         time.sleep(2.5)
-        # Popen startet den Befehl im Hintergrund, entkoppelt vom Python-Skript ("Fire & Forget")
         subprocess.Popen(["/usr/bin/sudo", "-n", "/sbin/reboot"])
         
     threading.Thread(target=delayed_reboot, daemon=True).start()
@@ -1144,7 +1143,10 @@ def sys_reboot():
 @app.route('/sys_shutdown', methods=['POST'])
 @requires_auth
 def sys_shutdown():
-    print("Web-Kommando empfangen: System fährt herunter.")
+    if request.form.get('confirm_action', '').lower() != 'yes':
+        return "Bestätigung fehlgeschlagen (Sicherheitsrichtlinie)", 400
+
+    logging.info("Web-Kommando empfangen: System fährt herunter.")
     shutdown_event.set() 
     
     def delayed_shutdown():
@@ -1169,13 +1171,18 @@ if __name__ == '__main__':
                 GPIO.output(TOUCH_RST_PIN, GPIO.HIGH)
                 time.sleep(0.2)
                 clear_touch_interrupt_via_i2c()
-                print("Kapazitives Touch-Display initialisiert.")
+                logging.info("Kapazitives Touch-Display initialisiert.")
             except Exception as e:
-                print(f"GPIO Setup Fehler: {e}")
+                logging.warning(f"GPIO Setup Fehler: {e}")
+
+        # PÄDAGOGISCH: Wir stellen sicher, dass die Schriften sofort am Start geladen 
+        # werden. So sparen wir Festplattenzugriffe, wenn das Display das erste 
+        # Mal aktualisiert wird (Optimierung).
+        init_fonts()
 
         threading.Thread(target=background_loop, daemon=True).start()
             
-        print(f" * Admin-Interface (Localhost): http://127.0.0.1:5000")
+        logging.info(f" * Admin-Interface (Localhost): http://127.0.0.1:5000")
         
         # PÄDAGOGISCHER HINTERGRUND (WSGI vs Proxy): 
         # Flask's eigener 'app.run()' Server ist nicht für echte Netzwerke gedacht. 
@@ -1193,7 +1200,7 @@ if __name__ == '__main__':
         if GPIO: GPIO.cleanup()
         
         if epd2in13_V3 is not None:
-            if display_lock.acquire(timeout=2):
+            if display_lock.acquire(timeout=5):
                 try:
                     epd = epd2in13_V3.EPD()
                     epd.init()
@@ -1201,9 +1208,9 @@ if __name__ == '__main__':
                     epd.sleep()
                     epd2in13_V3.epdconfig.module_exit()
                 except Exception as e: 
-                    print(f"Fehler beim finalen Display-Clear: {e}")
+                    logging.error(f"Fehler beim finalen Display-Clear: {e}")
                 finally:
                     display_lock.release()
             else:
-                print("Warnung: Display-Lock konnte beim Beenden nicht erlangt werden.")
+                logging.error("WARNUNG: Display-Lock konnte beim Beenden nicht erlangt werden. Display bleibt evtl. aktiv!")
         sys.exit(0)
