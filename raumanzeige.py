@@ -12,7 +12,8 @@ Zusätzlich stellt es ein lokales Web-Interface zur Administration bereit.
 
 Technische Schwerpunkte der Architektur: 
 - Nebenläufigkeit (Multithreading) & Ressourcen-Sperren (Locks)
-- Kryptographie (Passwort-Hashing, CSRF-Tokens & Brute-Force-Schutz)
+- Kryptographie (Passwort-Hashing & CSRF-Tokens)
+- Sicherheit (XSS-Vermeidung, Brute-Force Rate-Limiting)
 - Objektorientierung (State-Kapselung in AppState, Dataclasses)
 - Ausfallsicherheit (Atomare Dateizugriffe, Graceful Degradation)
 - Prinzip der geringsten Privilegien (PoLP für Systembefehle)
@@ -39,7 +40,7 @@ from functools import wraps
 from flask import Flask, render_template_string, request, redirect, Response, abort
 from waitress import serve
 from werkzeug.security import generate_password_hash, check_password_hash
-from markupsafe import escape  # NEU: Schutz gegen Cross-Site Scripting (XSS)
+from markupsafe import escape, Markup # NEU: Schutz gegen Cross-Site Scripting (XSS)
 from PIL import Image, ImageDraw, ImageFont
 
 # ------------------------------------------------------------------------------
@@ -115,7 +116,7 @@ class Lesson:
     (z.B. lesson['Fach'] statt lesson['fach']) oft passieren.
     """
     fach: str
-    fach_lang: str  # Für den ausgeschriebenen Namen, z.B. "Kunst AG"
+    fach_lang: str  # Für den ausgeschriebenen Namen, z.B. "Mathematik-Förderkurs"
     lehrer: str
     klasse: str
     zeit: str
@@ -134,13 +135,13 @@ class AppState:
         self.force_update_flag: bool = True     # Erzwingt ein sofortiges Display-Update
         self.show_demo_once: bool = False       # Zeigt einmalig simulierte Demo-Daten
         self.test_mode_active: bool = False     # Pausiert das System für den Testlauf
-        self.shutdown_event = threading.Event() # Signalisiert allen Threads das Beenden
+        self.shutdown_event = threading.Event() # Signalisiert allen Threads, dass das System beendet wird
         
         # TECHNISCHER HINTERGRUND: Thread-Locks (Sperren)
         # Hier laufen Threads parallel (Flask-Webserver vs. Hintergrund-Loop). 
         # Ein "Lock" (Mutex) wirkt wie ein Schlüssel: Wer den Schlüssel hat, darf 
-        # die Hardware/Datei nutzen. Der andere wartet. Das verhindert Datenkorruption.
-        self.display_lock = threading.Lock()    # Schützt das SPI-Display 
+        # die Hardware/Datei nutzen. Der andere Thread wartet. Das verhindert Datenkorruption.
+        self.display_lock = threading.Lock()    # Schützt das SPI-Display vor simultanen Schreibzugriffen
         self.state_lock = threading.Lock()      # Schützt Zugriffe auf diesen AppState
         self.config_lock = threading.Lock()     # Schützt das Dateisystem (config.json)
         
@@ -154,14 +155,15 @@ class AppState:
         self.last_holidays_fetch: float = 0
         self.global_fonts: Dict[str, ImageFont.FreeTypeFont] = {}
         
+        # Security: Rate-Limiting gegen Brute-Force-Angriffe (IP -> {count, lockout_until})
+        self.failed_logins: Dict[str, Dict[str, float]] = {}
+        
         # Security: Generiert beim Start einen einmaligen, kryptografisch sicheren Token.
+        # Schützt gegen CSRF (Cross-Site Request Forgery) Angriffe über das Web-Interface.
         self.csrf_token: str = secrets.token_hex(32)
 
+# Instanziierung des globalen Zustands
 app_state = AppState()
-
-# NEU: Brute-Force Schutz (Rate Limiting für das Web-Interface)
-# Speichert fehlerhafte Logins im Format: { 'IP-Adresse': (Fehlversuche_Count, Sperre_bis_Timestamp) }
-failed_logins: Dict[str, Tuple[int, float]] = {}
 
 
 # ==============================================================================
@@ -183,13 +185,15 @@ def get_cached_config() -> Dict[str, Any]:
                 app_state.last_config_mtime = mtime
         except Exception as e:
             logging.error(f"FEHLER beim Laden der config.json: {e}")
+        # Wichtig: Eine Kopie des Dictionaries zurückgeben (dict()), 
+        # damit Referenzverknüpfungen nicht versehentlich den Cache verändern.
         return dict(app_state.cached_config)
 
 def save_config(config: Dict[str, Any]) -> None:
     """
-    Speichert Einstellungen stromausfallsicher ab.
+    Speichert Einstellungen stromausfallsicher ab (Atomare Dateitransaktion).
     
-    TECHNISCHER HINTERGRUND: Atomare Dateitransaktion
+    TECHNISCHER HINTERGRUND:
     Würde der Raspberry Pi exakt während dem Schreibvorgang 'open(file, w)' 
     den Strom verlieren, wäre die config.json korrupt (0 Byte). Wir schreiben 
     daher erst in eine unsichtbare, temporäre Datei und tauschen diese am Ende 
@@ -202,14 +206,16 @@ def save_config(config: Dict[str, Any]) -> None:
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=4, ensure_ascii=False)
             os.replace(temp_path, CONFIG_FILE)
+            # RAM-Cache invalidieren, damit er beim nächsten Aufruf neu von der SD-Karte liest
             app_state.last_config_mtime = 0 
         except Exception as e:
             logging.error(f"FEHLER beim Speichern der config.json: {e}")
 
 def get_now() -> datetime.datetime:
     """
-    Gibt die aktuelle Zeit zurück. Abstrahiert die Systemzeit, um das Zeit-Simulations-
-    Feature im Web-Interface zu ermöglichen (Time-Travel-Tests für Ferien).
+    Gibt die aktuelle Zeit zurück. 
+    Abstrahiert die Systemzeit, um das Zeit-Simulations-Feature im Web-Interface 
+    zu ermöglichen (Time-Travel-Tests für Ferien und Randfälle).
     """
     with app_state.state_lock:
         if app_state.simulated_datetime:
@@ -241,7 +247,12 @@ def init_fonts() -> None:
 def check_touch_via_i2c() -> bool:
     """
     Prüft direkt über den I2C-Bus, ob der Touch-Chip eine Berührung registriert hat.
-    Das Setzen von [0x4E, 0x00] sendet eine Quittung, um den Alarm zurückzusetzen.
+    
+    TECHNISCHER HINTERGRUND:
+    Der Touch-Chip speichert Berührungen in einem internen Register (Adresse 0x81, 0x4E).
+    Wir lesen dieses Byte aus. Wenn das höchste Bit gesetzt ist (& 0x80), liegt 
+    ein Touch vor. Anschließend MÜSSEN wir dem Chip eine "Quittung" (0x00) zurücksenden,
+    damit er seinen internen Alarm wieder abschaltet, sonst bleibt der Touch hängen.
     """
     if not i2c_bus or not smbus: return False
     try:
@@ -249,7 +260,9 @@ def check_touch_via_i2c() -> bool:
         read_msg = smbus.i2c_msg.read(TOUCH_I2C_ADDR, 1)
         i2c_bus.i2c_rdwr(write_msg, read_msg)
         
+        # Bit-Maskierung auf Bit 7
         if list(read_msg)[0] & 0x80:
+            # Quittungssignal an den Touch-Chip senden (Reset)
             i2c_bus.write_i2c_block_data(TOUCH_I2C_ADDR, 0x81, [0x4E, 0x00])
             return True
     except OSError as e:
@@ -283,7 +296,8 @@ def clear_display_once() -> None:
 # ==============================================================================
 def parse_lesson(lesson, conf: Dict[str, Any]) -> Optional[Lesson]:
     """
-    Hilfsfunktion: Nimmt ein komplexes WebUntis-Objekt und extrahiert die Daten.
+    Hilfsfunktion: Nimmt ein komplexes, rohes WebUntis-Klassenobjekt und 
+    extrahiert genau die Daten, die wir für das Display brauchen.
     """
     if not lesson or not getattr(lesson, 'start', None) or not getattr(lesson, 'end', None): 
         return None
@@ -294,6 +308,7 @@ def parse_lesson(lesson, conf: Dict[str, Any]) -> Optional[Lesson]:
     start_str = lesson.start.strftime("%H:%M")
     stunde_name = ""
     
+    # Ordnet der reinen Uhrzeit (z.B. 08:00) den Namen der Stunde (z.B. "1. Std.") zu
     if isinstance(lessons_conf, list):
         for l in lessons_conf:
             if l.get("start") == start_str:
@@ -308,10 +323,11 @@ def parse_lesson(lesson, conf: Dict[str, Any]) -> Optional[Lesson]:
         if val and str(val).strip() and str(val).strip() not in info_parts:
             info_parts.append(str(val).strip())
             
+    # Auch den langen Fach-Namen aus der API extrahieren
     fach_kurz = ", ".join([s.name for s in getattr(lesson, 'subjects', [])])
-    # NEU: Auch den langen Fach-Namen aus der API extrahieren (für AGs etc.)
     fach_lang = ", ".join([getattr(s, 'long_name', '') for s in getattr(lesson, 'subjects', []) if getattr(s, 'long_name', '')])
     
+    # Rückgabe als sicher typisierte Dataclass
     return Lesson(
         fach=fach_kurz,
         fach_lang=fach_lang if fach_lang else fach_kurz,
@@ -325,13 +341,17 @@ def parse_lesson(lesson, conf: Dict[str, Any]) -> Optional[Lesson]:
 
 def get_current_lesson(conf: Dict[str, Any]) -> Tuple[Optional[Dict[str, Optional[Lesson]]], str]:
     """
-    Hauptfunktion: Lädt den Tagesplan für den Raum und filtert JETZT/DANACH heraus.
+    Hauptfunktion der Daten-Ebene: Verbindet sich mit der WebUntis-API, lädt den
+    Tagesplan für den konfigurierten Raum herunter und filtert heraus, was 
+    JETZT gerade stattfindet und was DANACH passiert.
     """
     req_keys = ['UNTIS_SERVER', 'UNTIS_USER', 'UNTIS_PASS', 'UNTIS_SCHOOL', 'ROOM_NAME']
     if not conf or any(not conf.get(k) for k in req_keys):
         return None, "Konfiguration unvollständig."
     
-    # Lokaler Socket-Timeout, damit ein Internetausfall nicht den ganzen Pi blockiert
+    # Lokaler Socket-Timeout (Best Practice)
+    # Python-webuntis hat nativ keinen Timeout-Parameter. Bricht das WLAN weg,
+    # würde die Funktion ewig blockieren. Wir zwingen sie zum Abbruch nach 30s.
     old_timeout = socket.getdefaulttimeout()
     socket.setdefaulttimeout(30)
     
@@ -355,28 +375,23 @@ def get_current_lesson(conf: Dict[str, Any]) -> Tuple[Optional[Dict[str, Optiona
         today = now.date()
         now_time = now.time()
 
-        # TECHNISCHER HINTERGRUND: Ferien-Erkennung & API-Schonung
+        # ----------------------------------------------------------------------
+        # PÄDAGOGISCHER HINTERGRUND: Ferien-Erkennung & API-Schonung
         # Da sich Ferien nicht stündlich ändern, sparen wir teure API-Aufrufe, 
-        # indem wir sie für 24 Stunden im RAM cachen. Wir iterieren über alle Schuljahre, 
-        # da Sommerferien oft exakt zwischen zwei Schuljahren liegen.
+        # indem wir die Ferientermine für 24 Stunden im RAM cachen.
+        # ----------------------------------------------------------------------
         now_ts = time.time()
         if app_state.cached_holidays is not None and (now_ts - app_state.last_holidays_fetch) < HOLIDAYS_CACHE_SECONDS:
             holidays = app_state.cached_holidays
         else:
-            holidays = []
             try:
-                for sy in session.schoolyears():
-                    holidays.extend(session.holidays(schoolyear=sy))
+                # Aktuelle Ferien abrufen (Standardabfrage ohne 'schoolyear')
+                holidays = session.holidays()
                 app_state.cached_holidays = holidays
                 app_state.last_holidays_fetch = now_ts
             except Exception as e:
-                logging.warning(f"Ferien-API Iteration fehlgeschlagen: {e}")
-                try:
-                    holidays = session.holidays()
-                    app_state.cached_holidays = holidays
-                    app_state.last_holidays_fetch = now_ts
-                except Exception:
-                    pass
+                logging.warning(f"Fehler beim Abrufen der Ferien: {e}")
+                holidays = []
                 
         for holiday in holidays:
             h_start = holiday.start.date() if isinstance(holiday.start, datetime.datetime) else holiday.start
@@ -385,14 +400,15 @@ def get_current_lesson(conf: Dict[str, Any]) -> Tuple[Optional[Dict[str, Optiona
             if h_start <= today <= h_end:
                 return {"current": None, "next": None}, f"Schöne Ferien!\n({holiday.name})"
         
-        # Am Wochenende API schonen
+        # Am Wochenende (Samstag=5, Sonntag=6) API schonen
         if now.weekday() >= 5: 
             return {"current": None, "next": None}, "Schönes Wochenende!"
             
         try:
             timetable = session.timetable(room=rooms[0], start=today, end=today)
         except Exception as e:
-            # WebUntis sperrt oft den Kalender in den Sommerferien ab ("DateNotAllowed").
+            # WebUntis sperrt oft den Kalender in den Sommerferien hart ab.
+            # Statt eines Absturzes werten wir den Error-String aus und zeigen Ferien an.
             err_str = str(e).lower()
             if "schoolyear" in err_str or "schuljahr" in err_str or "no valid" in err_str or "date" in err_str or "notallowed" in err_str:
                 return {"current": None, "next": None}, "Unterrichtsfrei!\n(Ferienzeit)"
@@ -402,8 +418,8 @@ def get_current_lesson(conf: Dict[str, Any]) -> Tuple[Optional[Dict[str, Optiona
         if not timetable:
             return {"current": None, "next": None}, "Unterrichtsfrei"
             
-        # TECHNISCHER HINTERGRUND: Lambda-Funktionen
-        # Sortiert den Plan chronologisch. getattr verhindert Abstürze bei fehlender 'start'-Zeit.
+        # Wir sortieren chronologisch. Fallback auf datetime.max verhindert Abstürze 
+        # bei beschädigten WebUntis-Einträgen, die kein Start-Datum haben.
         timetable = sorted(timetable, key=lambda l: getattr(l, 'start', datetime.datetime.max))
         current_lesson = None
         next_lesson = None
@@ -412,7 +428,7 @@ def get_current_lesson(conf: Dict[str, Any]) -> Tuple[Optional[Dict[str, Optiona
             if getattr(lesson, 'start', None) is None or getattr(lesson, 'end', None) is None:
                 continue
                 
-            # 5-Minuten-Vorlauf für das E-Paper
+            # 5-Minuten-Vorlauf: Das Display schaltet bereits 5 Min vor dem Klingeln auf die neue Stunde um
             lesson_start_buffered = lesson.start - datetime.timedelta(minutes=5)
             
             if lesson_start_buffered <= now <= lesson.end:
@@ -434,6 +450,7 @@ def get_current_lesson(conf: Dict[str, Any]) -> Tuple[Optional[Dict[str, Optiona
                     message = "Unterrichtsende"
                 else:
                     message = "Raum ist frei"
+                    # Befindet sich die aktuelle Zeit in einem definierten Pausen-Slot?
                     for b in schedule.get("BREAKS", []):
                         bs_h, bs_m = map(int, str(b.get("start", "00:00")).split(":"))
                         be_h, be_m = map(int, str(b.get("end", "00:00")).split(":"))
@@ -450,6 +467,8 @@ def get_current_lesson(conf: Dict[str, Any]) -> Tuple[Optional[Dict[str, Optiona
         }, message
         
     except Exception as e:
+        # PÄDAGOGISCHER HINTERGRUND: Spezifisches Error-Handling
+        # Hier geben wir je nach Fehlerbild sprechende Strings an das E-Paper zurück.
         error_msg = str(e)
         logging.error(f"WebUntis API Fehler: {error_msg}")
         if "HTTPSConnectionPool" in error_msg or "NameResolutionError" in error_msg or "Max retries" in error_msg or "timeout" in error_msg.lower():
@@ -469,32 +488,37 @@ def get_current_lesson(conf: Dict[str, Any]) -> Tuple[Optional[Dict[str, Optiona
 # 6. DARSTELLUNGS-EBENE: E-PAPER LAYOUT & CANVAS
 # ==============================================================================
 def get_text_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont) -> int:
-    """Hilfsfunktion: Berechnet die Pixelbreite eines Textes (wichtig fürs Zentrieren)."""
+    """Hilfsfunktion: Berechnet die exakte Pixelbreite eines Textes (wichtig fürs Zentrieren)."""
     try: return int(draw.textlength(text, font=font))
     except AttributeError:
+        # Abwärtskompatibilität für ältere Pillow-Versionen auf älteren Linux-Distributionen
         try: return draw.textbbox((0,0), text, font=font)[2] 
         except AttributeError: return draw.textsize(text, font=font)[0] 
 
 def draw_lesson_block(draw: ImageDraw.ImageDraw, lesson: Lesson, y_offset: int, label_text: str, f_small, f_reg, f_med) -> None:
     """
     Zeichnet einen strukturierten Unterrichtsblock (JETZT oder DANACH) als Grafik.
+    Wertet die Status-Codes (cancelled = Ausfall, irregular = Vertretung) aus
+    und hebt diese farblich durch Invertierung (schwarzer Kasten) hervor.
     """
     header_text = f"{label_text} {lesson.stunde} ({lesson.zeit})"
     draw.text((UI_MARGIN, y_offset), header_text, font=f_small, fill=0) 
     
     status = lesson.status_code
     
-    # TECHNISCHER HINTERGRUND: Layout-Optimierung
-    # Das E-Paper ist nur 122 Pixel hoch. Um lange Fach-Namen (z.B. "Kunst AG") 
-    # nicht abzuschneiden, teilen wir den Block in zwei kompakte Zeilen auf.
+    # PÄDAGOGISCHER HINTERGRUND (Layout-Optimierung):
+    # Wir teilen den verfügbaren Platz im Stundenblock in zwei Zeilen auf, 
+    # um lange Namen und Zusatzinfos (Lehrer/Klasse) gleichzeitig anzuzeigen.
     y_content = y_offset + 13 
     
+    # Welches Fach zeigen wir? Bevorzuge den langen Namen (z.B. "Biologie-Profilkurs")
     fach_anzeige = lesson.fach_lang if lesson.fach_lang else lesson.fach
     if not fach_anzeige:
         fach_anzeige = "Kein Fach"
         
     # ZEILE 1: Tag (Ausfall/Vertretung) und das Fach
     if status == 'cancelled':
+        # "FÄLLT AUS" wurde zu "AUSFALL" gekürzt, damit längere Fachnamen daneben passen
         draw.rectangle((UI_MARGIN, y_content, 65, y_content + 14), fill=0)
         draw.text((UI_MARGIN + 3, y_content + 1), "AUSFALL", font=f_small, fill=255) 
         draw.text((70, y_content), fach_anzeige, font=f_reg, fill=0)
@@ -503,6 +527,7 @@ def draw_lesson_block(draw: ImageDraw.ImageDraw, lesson: Lesson, y_offset: int, 
         draw.text((UI_MARGIN + 3, y_content + 1), "VERTRETUNG", font=f_small, fill=255)
         draw.text((87, y_content), fach_anzeige, font=f_reg, fill=0)
     else:
+        # Regulärer Unterricht
         draw.text((UI_MARGIN, y_content), fach_anzeige, font=f_reg, fill=0)
         
     # ZEILE 2: Zusatzinfos (Klasse, Lehrer, Info-Text)
@@ -516,7 +541,10 @@ def draw_lesson_block(draw: ImageDraw.ImageDraw, lesson: Lesson, y_offset: int, 
     draw.text((UI_MARGIN, y_details), detail_str, font=f_small, fill=0)
 
 def update_display_logic(data: Optional[Dict[str, Optional[Lesson]]], message: str, conf: Dict[str, Any]) -> None:
-    """Erstellt ein 1-Bit (S/W) Bitmap und sendet es an das E-Paper-Display."""
+    """
+    Erstellt ein 1-Bit (Schwarz/Weiß) Bitmap-Bild des Stundenplans und sendet
+    es an den Hardware-Controller des Waveshare E-Paper-Displays.
+    """
     if app_state.shutdown_event.is_set(): return 
     message = message or "" 
 
@@ -524,11 +552,14 @@ def update_display_logic(data: Optional[Dict[str, Optional[Lesson]]], message: s
         logging.info(f"Display-Update (Simulation): {message}")
         return
         
+    # Thread-Lock: Garantiert, dass wir das Display nicht versehentlich 
+    # von zwei Threads gleichzeitig flashen (SPI-Kollision).
     with app_state.display_lock: 
         try: 
             epd = epd2in13_V3.EPD()
             epd.init()
             
+            # Neues, komplett weißes Bild (255) erzeugen
             image = Image.new('1', (epd.height, epd.width), 255) 
             draw = ImageDraw.Draw(image) 
             
@@ -568,6 +599,9 @@ def update_display_logic(data: Optional[Dict[str, Optional[Lesson]]], message: s
             
             # --- HAUPTBEREICH (Freistunde / Ferien) ---
             else:
+                # Wir handhaben mehrzeilige Strings (\n), damit lange Texte 
+                # (wie "Unterrichtsfrei!\n(Ferienzeit)") sauber und mittig auf 
+                # das schmale Display passen.
                 if "\n" in message:
                     lines = message.split("\n")
                     y_pos = 45
@@ -581,8 +615,11 @@ def update_display_logic(data: Optional[Dict[str, Optional[Lesson]]], message: s
                     x_pos = (UI_WIDTH - text_w) / 2 if text_w < UI_WIDTH else 2
                     draw.text((x_pos, 60), message, font=f_mega, fill=0)
 
+            # Das fertige Bitmap an den Hardware-Controller übertragen
             epd.display(epd.getbuffer(image))
-            epd.sleep() # EXTREM WICHTIG: Display in den Schlaf schicken
+            # EXTREM WICHTIG: Das Display am Ende in den Deep-Sleep schicken!
+            # Steht das E-Paper dauerhaft unter Spannung, brennt die E-Tinte ein.
+            epd.sleep()
         except Exception as e:
             logging.error(f"Hardware-Fehler (Display): {e}")
 
@@ -591,12 +628,17 @@ def update_display_logic(data: Optional[Dict[str, Optional[Lesson]]], message: s
 # 7. STEUERUNGS-EBENE: HINTERGRUND-LOOP & TEST-ROUTINE
 # ==============================================================================
 def run_display_test_sequence() -> None:
-    """Spielt hardcodierte Test-Szenarien nacheinander auf dem Hardware-Display ab."""
+    """
+    Spielt hardcodierte Test-Szenarien nacheinander auf dem Hardware-Display ab.
+    Dient zur Überprüfung von Sonderfällen (Ausfall, Vertretung, Lauftext) 
+    direkt vor Ort im Flur, ohne reale Plandaten manipulieren zu müssen.
+    """
     with app_state.state_lock:
         app_state.test_mode_active = True
         
     conf = get_cached_config()
     
+    # Nutzung der neuen Dataclass für die Dummy-Daten
     test_cases = [
         ( {"current": Lesson("Geschichte", "Geschichte (Epochal)", "Ab", "9B", "08:00 - 08:45", "1. Std.", None, "Buch auf Seite 12 aufschlagen"),
            "next": Lesson("Informatik", "Informatik", "Cd", "11B", "08:50 - 09:35", "2. Std.", None, "")}, "" ),
@@ -619,6 +661,7 @@ def run_display_test_sequence() -> None:
             app_state.current_display_msg = f"TESTLAUF ({idx+1}/{len(test_cases)})..."
         
         update_display_logic(data, msg, conf)
+        # .wait() statt sleep() nutzen, um den Vorgang bei einem Shutdown abbrechen zu können
         app_state.shutdown_event.wait(4) 
         
     with app_state.state_lock:
@@ -626,7 +669,11 @@ def run_display_test_sequence() -> None:
         app_state.force_update_flag = True
 
 def background_loop() -> None:
-    """Der Kernprozess (Endlosschleife), der im Hintergrund läuft."""
+    """
+    Der Kernprozess (Endlosschleife), der asynchron im Hintergrund läuft.
+    Er vergleicht die aktuelle Uhrzeit mit dem Stundenplan und feuert ein 
+    Update-Event, wenn eine neue Stunde beginnt oder das Display berührt wurde.
+    """
     last_update = 0
     last_touch_time = time.time()
     last_minute_triggered = None
@@ -648,9 +695,8 @@ def background_loop() -> None:
         schedule = conf.get("SCHEDULE", {})
         lessons_conf = schedule.get("LESSONS", [])
         
-        # TECHNISCHER HINTERGRUND: Sets statt Listen für O(1) Laufzeit
-        # Wir durchsuchen diese Menge bei jedem Schleifendurchlauf. Sets in Python 
-        # nutzen Hashtabellen und sind extrem viel schneller beim Suchen als Listen.
+        # PÄDAGOGISCH: Wir nutzen 'Sets' anstelle von Listen für die Suchzeiten. 
+        # Sets garantieren extrem schnelle Zugriffszeiten (O(1)), was den Pi entlastet.
         dyn_update_times = set() 
         
         if isinstance(lessons_conf, list):
@@ -660,6 +706,7 @@ def background_loop() -> None:
                 if start_t: 
                     dyn_update_times.add(start_t)
                     try:
+                        # Berechne den 5-Minuten-Vorlauf
                         h, m = map(int, str(start_t).split(":"))
                         dt = datetime.datetime(2000, 1, 1, h, m) - datetime.timedelta(minutes=5)
                         dyn_update_times.add(dt.strftime("%H:%M"))
@@ -680,6 +727,7 @@ def background_loop() -> None:
         current_hm = current_dt.strftime("%H:%M")
         current_time_obj = current_dt.time()
         
+        # Laufzeit-Prüfung: Außerhalb der Schulzeiten updaten wir seltener
         try:
             ds_h, ds_m = map(int, schedule.get("DAY_START", "07:55").split(":"))
             de_h, de_m = map(int, schedule.get("DAY_END", "15:30").split(":"))
@@ -689,6 +737,7 @@ def background_loop() -> None:
         except Exception:
             is_active_hours = True 
 
+        # Touch-Erkennung
         if conf.get('TOUCH_ACTIVE', True) and check_touch_via_i2c():
             if now_time_system - last_touch_time > TOUCH_COOLDOWN:
                 logging.info(f"Display beruehrt! Update wird vorbereitet...")
@@ -700,9 +749,11 @@ def background_loop() -> None:
             current_force_update = app_state.force_update_flag
             current_show_demo = app_state.show_demo_once
 
+        # Logik: Update erforderlich?
         is_exact_time = (current_hm in dyn_update_times) and (last_minute_triggered != current_hm)
         is_interval_reached = (now_time_system - last_update >= conf.get('AUTO_UPDATE_SECONDS', 900)) and is_active_hours
 
+        # Update ausführen
         if current_force_update or is_interval_reached or is_exact_time:
             if is_exact_time: last_minute_triggered = current_hm 
             is_manual = current_force_update 
@@ -722,6 +773,7 @@ def background_loop() -> None:
                 else:
                     data, err = get_current_lesson(conf)
                 
+                # Cachen der Ergebnisse für das Webinterface
                 with app_state.state_lock:
                     app_state.current_display_data = data
                     app_state.current_display_msg = err
@@ -729,6 +781,7 @@ def background_loop() -> None:
                 current_date = current_dt.strftime("%Y-%m-%d")
                 is_static_day = err in ["Schönes Wochenende!", "Unterrichtsfrei"] or (isinstance(err, str) and "Ferien" in err)
                 
+                # E-Paper Schonung: Statische Meldungen (z.B. Ferien) zeichnen wir nur einmal pro Tag neu
                 skip_update = False
                 if is_static_day and not is_manual:
                     if last_static_date == current_date: skip_update = True
@@ -745,6 +798,7 @@ def background_loop() -> None:
             clear_touch_interrupt_via_i2c()
             last_touch_time = time.time()
             
+        # Kurze Pause verhindert CPU-Spam (100% Auslastung)
         app_state.shutdown_event.wait(0.5)
 
 
@@ -753,24 +807,14 @@ def background_loop() -> None:
 # ==============================================================================
 def check_auth(username, password) -> bool:
     """
-    TECHNISCHER HINTERGRUND: Kryptographie & Brute-Force-Schutz
-    Passwörter werden beim ersten Start via werkzeug.security als Hash gespeichert.
-    Zusätzlich sperren wir IPs für 60 Sekunden, wenn sie 5x das falsche Passwort
-    eingeben. Dies vereitelt automatische Brute-Force Rate-Angriffe im Schul-WLAN.
-    """
-    ip = request.remote_addr
-    now = time.time()
+    Überprüft die HTTP Basic Auth Zugangsdaten.
     
-    # Rate-Limiting Check
-    if ip in failed_logins:
-        attempts, lockout_end = failed_logins[ip]
-        if now < lockout_end:
-            logging.warning(f"Login gesperrt für IP {ip} (Brute-Force Schutz aktiv).")
-            return False
-        elif now > lockout_end and attempts >= 5:
-            # Sperre ist abgelaufen, Counter zurücksetzen
-            failed_logins.pop(ip, None)
-            
+    TECHNISCHER HINTERGRUND (Kryptographie):
+    Passwörter sollten niemals im Klartext gespeichert werden! 
+    Wir nutzen 'werkzeug.security', um das Klartext-Passwort aus der config.json 
+    beim ersten Start einmalig in einen Einweg-Hash umzuwandeln (Auto-Migration). 
+    Selbst wenn Hacker die SD-Karte stehlen, sehen sie nur den Hash.
+    """
     conf = get_cached_config()
     u = conf.get('ADMIN_USER', 'admin')
     saved_pass = conf.get('ADMIN_PASS', 'tuerschild')
@@ -782,36 +826,63 @@ def check_auth(username, password) -> bool:
         save_config(conf)
         saved_pass = hashed_pass
 
-    is_valid = (username == u and check_password_hash(saved_pass, password))
-    
-    if is_valid:
-        failed_logins.pop(ip, None) # Erfolgreich: Fehler-Counter löschen
-        return True
-    else:
-        # Falsches Passwort: Counter erhöhen
-        attempts = failed_logins.get(ip, (0, 0))[0] + 1
-        if attempts >= 5:
-            logging.warning(f"Zu viele fehlerhafte Logins von {ip}. Sperre für 60s.")
-            failed_logins[ip] = (attempts, now + 60)
-        else:
-            failed_logins[ip] = (attempts, 0)
-        return False
+    return username == u and check_password_hash(saved_pass, password)
 
 def authenticate():
+    """Gibt den HTTP 401 Fehler (Unauthorized) an den Browser zurück, der daraufhin nach Passwörtern fragt."""
     return Response(
     'Zugriff verweigert. Bitte korrekte Zugangsdaten eingeben.\n', 401,
     {'WWW-Authenticate': 'Basic realm="Tuerschild Admin-Bereich"'})
 
 def requires_auth(f):
+    """
+    Decorator (@requires_auth) für alle geschützten Flask-Routen.
+    
+    TECHNISCHER HINTERGRUND (Sicherheit & Rate Limiting):
+    Hier wird nicht nur das Passwort geprüft, sondern auch ein In-Memory Rate Limiter 
+    implementiert. Er sperrt eine IP-Adresse für 60 Sekunden, sobald 5 Fehlversuche 
+    registriert wurden. Das schützt den Raspberry Pi vor automatisierten Brute-Force-Angriffen.
+    """
     @wraps(f)
     def decorated(*args, **kwargs):
+        ip = request.remote_addr
+        now = time.time()
+        
+        # 1. Rate Limiting Check (Wurde diese IP bereits blockiert?)
+        with app_state.state_lock:
+            attempt_data = app_state.failed_logins.get(ip, {'count': 0, 'lockout_until': 0})
+            if now < attempt_data['lockout_until']:
+                wait_time = int(attempt_data['lockout_until'] - now)
+                abort(429, description=f"Zu viele Fehlversuche. Bitte warten Sie {wait_time} Sekunden.")
+        
+        # 2. Login-Überprüfung
         auth = request.authorization
         if not auth or not check_auth(auth.username, auth.password):
+            # Fehlversuch protokollieren und Zähler erhöhen
+            with app_state.state_lock:
+                attempt_data['count'] += 1
+                if attempt_data['count'] >= 5:
+                    logging.warning(f"Brute-Force Schutz: IP {ip} temporär gesperrt.")
+                    attempt_data['lockout_until'] = now + 60
+                    attempt_data['count'] = 0 # Reset des Zählers nach Sperre
+                app_state.failed_logins[ip] = attempt_data
             return authenticate()
+        
+        # 3. Erfolgreicher Login -> Rate-Limiter Zähler für diese IP bereinigen
+        with app_state.state_lock:
+            if ip in app_state.failed_logins:
+                del app_state.failed_logins[ip]
+                
         return f(*args, **kwargs)
     return decorated
 
 def verify_csrf(f):
+    """
+    Decorator (@verify_csrf) gegen Cross-Site Request Forgery (CSRF).
+    Prüft bei allen POST-Anfragen, ob das Webinterface den korrekten, 
+    kryptographischen Token (self.csrf_token) mitgesendet hat. 
+    Verhindert, dass fremde Skripte von außen ungewollt Systembefehle ausführen.
+    """
     @wraps(f)
     def decorated(*args, **kwargs):
         token = request.form.get('csrf_token')
@@ -821,10 +892,11 @@ def verify_csrf(f):
     return decorated
 
 # ------------------------------------------------------------------------------
-# TECHNISCHER HINTERGRUND: HTML Inline, CSS Flexbox & CSS Grid
+# HINWEIS ZUR PORTABILITÄT (HTML inline & CSS Grid):
 # Normalerweise gehört HTML in /templates. Da dieses Skript aber oft per 
 # Copy&Paste installiert wird, bleibt alles in einer Datei (Zero-Config-Ansatz).
-# Das Layout nutzt CSS Grid und einen Mobile-First Ansatz (Flexbox column).
+# Das Layout nutzt CSS Grid und einen Mobile-First Ansatz (Flexbox column), 
+# damit es sich auf Smartphones und Desktop-PCs automatisch perfekt anordnet.
 # ------------------------------------------------------------------------------
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -964,7 +1036,7 @@ HTML_TEMPLATE = """
                                     {% endif %}
                                 </div>
                             {% else %}
-                                <div class="empty-state">{{ msg | safe }}</div>
+                                <div class="empty-state">{{ msg }}</div>
                             {% endif %}
 
                             <h4 style="margin: 20px 0 5px 0; font-size: 12px; color: #64748b;">DANACH</h4>
@@ -995,7 +1067,7 @@ HTML_TEMPLATE = """
                             
                         {% else %}
                             <div class="empty-state" style="font-size: 16px; padding: 30px 20px;">
-                                {{ msg | safe }}
+                                {{ msg }}
                             </div>
                         {% endif %}
                     </div>
@@ -1050,24 +1122,30 @@ HTML_TEMPLATE = """
 </html>
 """
 
+# ------------------------------------------------------------------------------
+# FLASK ROUTEN (Endpunkte für das Web-Interface)
+# ------------------------------------------------------------------------------
 @app.route('/')
 @requires_auth
 def index():
+    """Rendert die Hauptseite des Admin-Interfaces mit Jinja2-Templating."""
     conf = get_cached_config()
     
+    # Thread-sicherer Lesevorgang aus dem globalen State
     with app_state.state_lock:
         is_simulated = app_state.simulated_datetime is not None
         d_data = app_state.current_display_data
-        d_msg = app_state.current_display_msg
+        d_msg_raw = app_state.current_display_msg
         c_token = app_state.csrf_token
         
+    # PÄDAGOGISCHER HINTERGRUND (Sicherheit gegen XSS):
+    # Um zu verhindern, dass externe API-Daten schadhaften HTML-Code in unser
+    # Dashboard einschleusen (Cross-Site Scripting), escapen wir den Text zuerst.
+    # Erst DANACH ersetzen wir die reinen Zeilenumbrüche (\n) durch HTML-Breaks (<br>), 
+    # damit lange Feriennamen im Browser schön dargestellt werden.
+    d_msg_safe = Markup(escape(d_msg_raw)).replace('\n', Markup('<br>'))
+        
     display_time = get_now().strftime("%d.%m.%Y %H:%M:%S")
-
-    # TECHNISCHER HINTERGRUND: XSS-Schutz (Cross-Site Scripting)
-    # Die Nachricht wird hier sicher per escape() von schädlichen HTML-Tags befreit 
-    # (falls z.B. WebUntis gehackt wurde). Erst danach ersetzen wir die Umbrüche 
-    # durch <br> Tags. Im HTML verwenden wir dann den | safe Filter.
-    d_msg_safe = str(escape(d_msg)).replace('\n', '<br>') if d_msg else ""
 
     return render_template_string(
         HTML_TEMPLATE, 
@@ -1177,11 +1255,15 @@ def toggle_touch():
 @verify_csrf
 def sys_reboot():
     """
-    TECHNISCHER HINTERGRUND: PoLP & Fire and Forget
-    1. PoLP (Prinzip der geringsten Privilegien): Der Nutzer 'pi' darf über sudo
-       exakt diesen Reboot-Befehl ohne Passwort ausführen.
-    2. Fire & Forget: Popen startet den Befehl als losgelösten Prozess. Flask
-       sendet sofort eine Bestätigung an den Browser, BEVOR das System neustartet.
+    Startet das System über den Linux-Befehl 'reboot' neu.
+    
+    TECHNISCHER HINTERGRUND (PoLP & Fire and Forget):
+    1. PoLP (Prinzip der geringsten Privilegien): Der Nutzer 'pi' hat über die 
+       /etc/sudoers eine Ausnahmegenehmigung erhalten, diesen EINEN Befehl ohne 
+       Passwortabfrage auszuführen.
+    2. Fire & Forget: Popen() startet den Befehl als losgelösten Unterprozess. 
+       Das ermöglicht es Flask, sofort eine HTTP 200 Erfolgsmeldung an den Browser 
+       zurückzusenden, BEVOR das System tatsächlich neustartet und blockiert.
     """
     logging.info("Web-Kommando empfangen: System wird neu gestartet.")
     app_state.shutdown_event.set() 
@@ -1197,6 +1279,7 @@ def sys_reboot():
 @requires_auth
 @verify_csrf
 def sys_shutdown():
+    """Fährt das System sicher herunter (Shutdown)."""
     logging.info("Web-Kommando empfangen: System fährt herunter.")
     app_state.shutdown_event.set() 
     
@@ -1215,6 +1298,7 @@ if __name__ == '__main__':
     try:
         if GPIO:
             try:
+                # Hardware Setup: I2C-Pin des Touch-Panels vorbereiten
                 GPIO.setmode(GPIO.BCM)
                 GPIO.setup(TOUCH_RST_PIN, GPIO.OUT)
                 GPIO.output(TOUCH_RST_PIN, GPIO.LOW)
@@ -1226,34 +1310,35 @@ if __name__ == '__main__':
             except OSError as e:
                 logging.debug(f"GPIO Setup Fehler: {e}")
 
+        # Schriftarten vorab in den RAM laden (Optimierung)
         init_fonts()
 
+        # Hintergrundschleife für API-Pulls als asynchronen Dämonen-Thread starten
         threading.Thread(target=background_loop, daemon=True).start()
             
         logging.info(f" * Admin-Interface (Localhost): http://127.0.0.1:5000")
         
-        # TECHNISCHER HINTERGRUND: WSGI vs Proxy
-        # Flasks eigener 'app.run()' Server ist nicht netzwerksicher. 
-        # 'Waitress' wickelt als robuster WSGI-Server die HTTP-Requests ab.
+        # Flasks eingebauter Server ist nicht netzwerksicher. Daher wickelt 
+        # 'Waitress' als robuster WSGI-Server die HTTP-Requests ab.
         serve(app, host='127.0.0.1', port=5000)
         
     except KeyboardInterrupt:
+        # Fängt das STRG+C Signal des Nutzers im Terminal ab
         app_state.shutdown_event.set()
     finally:
-        # TECHNISCHER HINTERGRUND: Deadlock-Prävention
-        # Das wird immer ausgeführt (auch bei Abstürzen oder beim sudo-Reboot), 
-        # um die Hardware sicher in den Deep-Sleep zu versetzen. 
-        # Der 5 Sekunden Timeout verhindert, dass das Skript hier endlos hängt.
+        # Wird immer ausgeführt (auch bei Abstürzen oder beim sudo-Reboot), 
+        # um die Hardware sicher herunterzufahren und Ressourcen freizugeben.
         app_state.shutdown_event.set()
         if GPIO: GPIO.cleanup()
         
         if epd2in13_V3 is not None:
+            # 5 Sekunden Timeout verhindern, dass das Skript endlos hängt (Deadlock)
             if app_state.display_lock.acquire(timeout=5):
                 try:
                     epd = epd2in13_V3.EPD()
                     epd.init()
                     epd.Clear(0xFF)
-                    epd.sleep() 
+                    epd.sleep()  # Deep-Sleep (Bewahrt die Tinte vor dem Einbrennen)
                     epd2in13_V3.epdconfig.module_exit()
                 except OSError as e: 
                     logging.debug(f"Fehler beim finalen Display-Clear: {e}")
@@ -1262,3 +1347,4 @@ if __name__ == '__main__':
             else:
                 logging.error("WARNUNG: Display-Lock konnte beim Beenden nicht erlangt werden.")
         sys.exit(0)
+```eof
