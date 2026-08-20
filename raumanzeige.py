@@ -114,6 +114,7 @@ class Lesson:
     (z.B. lesson['Fach'] statt lesson['fach']) oft passieren.
     """
     fach: str
+    fach_lang: str  # NEU: Für den ausgeschriebenen Namen, z.B. "Mathematik-Förderkurs"
     lehrer: str
     klasse: str
     zeit: str
@@ -316,10 +317,15 @@ def parse_lesson(lesson, conf: Dict[str, Any]) -> Optional[Lesson]:
         val = getattr(lesson, attr, '')
         if val and str(val).strip() and str(val).strip() not in info_parts:
             info_parts.append(str(val).strip())
+            
+    # NEU: Auch den langen Fach-Namen aus der API extrahieren
+    fach_kurz = ", ".join([s.name for s in getattr(lesson, 'subjects', [])])
+    fach_lang = ", ".join([getattr(s, 'long_name', '') for s in getattr(lesson, 'subjects', []) if getattr(s, 'long_name', '')])
     
     # Rückgabe als sicher typisierte Dataclass
     return Lesson(
-        fach=", ".join([s.name for s in getattr(lesson, 'subjects', [])]),
+        fach=fach_kurz,
+        fach_lang=fach_lang if fach_lang else fach_kurz,
         lehrer=", ".join([t.name for t in getattr(lesson, 'teachers', [])]),
         klasse=", ".join([k.name for k in getattr(lesson, 'klassen', [])]),
         zeit=f"{start_str} - {lesson.end.strftime('%H:%M')}",
@@ -504,24 +510,40 @@ def draw_lesson_block(draw: ImageDraw.ImageDraw, lesson: Lesson, y_offset: int, 
     draw.text((UI_MARGIN, y_offset), header_text, font=f_small, fill=0) 
     
     status = lesson.status_code
-    y_content = y_offset + 16
     
+    # PÄDAGOGISCHER HINTERGRUND (Layout-Optimierung):
+    # Wir teilen den verfügbaren Platz im Stundenblock in zwei Zeilen auf, 
+    # um lange Namen und Zusatzinfos (Lehrer/Klasse) gleichzeitig anzuzeigen.
+    y_content = y_offset + 13 
+    
+    # Welches Fach zeigen wir? Bevorzuge den langen Namen (z.B. "Biologie-Profilkurs")
+    fach_anzeige = lesson.fach_lang if lesson.fach_lang else lesson.fach
+    if not fach_anzeige:
+        fach_anzeige = "Kein Fach"
+        
+    # ZEILE 1: Tag (Ausfall/Vertretung) und das Fach
     if status == 'cancelled':
-        # Schwarzes Rechteck zeichnen und Schrift weiß färben (fill=255)
-        draw.rectangle((UI_MARGIN, y_content, 85, y_content + 18), fill=0)
-        draw.text((8, y_content+2), "FÄLLT AUS", font=f_small, fill=255) 
-        draw.text((90, y_content), f"{lesson.klasse}", font=f_reg, fill=0)
-        
+        # "FÄLLT AUS" wurde zu "AUSFALL" gekürzt, damit längere Fachnamen daneben passen
+        draw.rectangle((UI_MARGIN, y_content, 65, y_content + 14), fill=0)
+        draw.text((UI_MARGIN + 3, y_content + 1), "AUSFALL", font=f_small, fill=255) 
+        draw.text((70, y_content), fach_anzeige, font=f_reg, fill=0)
     elif status == 'irregular':
-        draw.rectangle((UI_MARGIN, y_content, 90, y_content + 18), fill=0)
-        draw.text((8, y_content+2), "VERTRETUNG", font=f_small, fill=255)
-        main_info = f"{lesson.fach} | {lesson.klasse} ({lesson.lehrer})"
-        draw.text((95, y_content), main_info, font=f_reg, fill=0)
-        
+        draw.rectangle((UI_MARGIN, y_content, 82, y_content + 14), fill=0)
+        draw.text((UI_MARGIN + 3, y_content + 1), "VERTRETUNG", font=f_small, fill=255)
+        draw.text((87, y_content), fach_anzeige, font=f_reg, fill=0)
     else:
-        # Regulärer Unterrichtsblock
-        main_info = f"{lesson.fach} | {lesson.klasse} ({lesson.lehrer})"
-        draw.text((UI_MARGIN, y_content), main_info, font=f_reg, fill=0)
+        # Regulärer Unterricht
+        draw.text((UI_MARGIN, y_content), fach_anzeige, font=f_reg, fill=0)
+        
+    # ZEILE 2: Zusatzinfos (Klasse, Lehrer, Info-Text)
+    y_details = y_content + 13
+    details = []
+    if lesson.klasse: details.append(f"Kl: {lesson.klasse}")
+    if lesson.lehrer: details.append(f"Lehrkraft: {lesson.lehrer}")
+    if lesson.stunden_info: details.append(lesson.stunden_info)
+    
+    detail_str = " | ".join(details)
+    draw.text((UI_MARGIN, y_details), detail_str, font=f_small, fill=0)
 
 def update_display_logic(data: Optional[Dict[str, Optional[Lesson]]], message: str, conf: Dict[str, Any]) -> None:
     """
@@ -621,14 +643,15 @@ def run_display_test_sequence() -> None:
         
     conf = get_cached_config()
     
+    # Nutzung der neuen Dataclass für die Dummy-Daten
     test_cases = [
-        ( {"current": Lesson("Geschichte", "Ab", "9B", "08:00 - 08:45", "1. Std.", None, "Buch auf Seite 12 aufschlagen"),
-           "next": Lesson("Informatik", "Cd", "11B", "08:50 - 09:35", "2. Std.", None, "")}, "" ),
+        ( {"current": Lesson("Geschichte", "Geschichte (Epochal)", "Ab", "9B", "08:00 - 08:45", "1. Std.", None, "Buch auf Seite 12 aufschlagen"),
+           "next": Lesson("Informatik", "Informatik", "Cd", "11B", "08:50 - 09:35", "2. Std.", None, "")}, "" ),
         
-        ( {"current": Lesson("Religion", "Ef", "7A", "09:55 - 10:40", "3. Std.", "cancelled", "Aufgaben in IServ bearbeiten"),
-           "next": Lesson("Geschichte", "Ef", "12", "10:45 - 11:30", "4. Std.", None, "")}, "" ),
+        ( {"current": Lesson("Religion", "Religion", "Ef", "7A", "09:55 - 10:40", "3. Std.", "cancelled", "Aufgaben in IServ bearbeiten"),
+           "next": Lesson("Geschichte", "Geschichte", "Ef", "12", "10:45 - 11:30", "4. Std.", None, "")}, "" ),
         
-        ( {"current": Lesson("Werte u. Normen", "Gk", "8C", "11:45 - 12:30", "5. Std.", "irregular", "Achtung: Raumänderung nach In2"),
+        ( {"current": Lesson("Werte u. Normen", "Werte u. Normen", "Gk", "8C", "11:45 - 12:30", "5. Std.", "irregular", "Achtung: Raumänderung nach In2"),
            "next": None}, "" ),
         
         ( None, "Unterrichtsfrei!\n(Ferienzeit)" ),
@@ -746,8 +769,8 @@ def background_loop() -> None:
             if conf.get('DISPLAY_ACTIVE', True):
                 if current_show_demo:
                     data = {
-                        "current": Lesson("Informatik", "Ab", "11B", "09:55 - 10:40", "3. Std.", "irregular", "Theorieunterricht - Netzwerktechnik"),
-                        "next": Lesson("Geschichte", "Cd", "9B", "10:45 - 11:30", "4. Std.", None, "")
+                        "current": Lesson("Informatik", "Informatik", "Ab", "11B", "09:55 - 10:40", "3. Std.", "irregular", "Theorieunterricht - Netzwerktechnik"),
+                        "next": Lesson("Geschichte", "Geschichte", "Cd", "9B", "10:45 - 11:30", "4. Std.", None, "")
                     }
                     err = ""
                     with app_state.state_lock:
@@ -979,7 +1002,7 @@ HTML_TEMPLATE = """
                                     {% elif data.current.status_code == 'irregular' %}<div class="tag-yellow">Vertretung</div>{% endif %}
                                     
                                     <div style="font-size: 16px; font-weight: 800; color: #1e293b; margin-bottom: 4px;">
-                                        {{ data.current.fach }} <span style="color: #cbd5e1; margin: 0 4px;">|</span> {{ data.current.klasse }}
+                                        {{ data.current.fach_lang if data.current.fach_lang else data.current.fach }} <span style="color: #cbd5e1; margin: 0 4px;">|</span> {{ data.current.klasse }}
                                     </div>
                                     <div style="font-size: 12px; color: #475569; font-weight: 600;">Lehrkraft: {{ data.current.lehrer }}</div>
                                     
@@ -1005,7 +1028,7 @@ HTML_TEMPLATE = """
                                     {% elif data.next.status_code == 'irregular' %}<div class="tag-yellow">Vertretung</div>{% endif %}
                                     
                                     <div style="font-size: 16px; font-weight: 800; color: #1e293b; margin-bottom: 4px;">
-                                        {{ data.next.fach }} <span style="color: #cbd5e1; margin: 0 4px;">|</span> {{ data.next.klasse }}
+                                        {{ data.next.fach_lang if data.next.fach_lang else data.next.fach }} <span style="color: #cbd5e1; margin: 0 4px;">|</span> {{ data.next.klasse }}
                                     </div>
                                     <div style="font-size: 12px; color: #475569; font-weight: 600;">Lehrkraft: {{ data.next.lehrer }}</div>
                                     
