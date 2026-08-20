@@ -48,13 +48,6 @@ Eine vollständige, detaillierte Schritt-für-Schritt-Anleitung zur Einrichtung 
 
 Das Programm erfordert eine Konfigurationsdatei namens `config.json` im Hauptverzeichnis. Nutzen Sie die bereitgestellte Datei `config_example.json` als Vorlage.
 
-### **🔒 Wichtige Hinweise zu Datenschutz und Sicherheit**
-
-* **Principle of Least Privilege (PoLP):** Der Webserver läuft aus Sicherheitsgründen als eingeschränkter Standardnutzer (`pi`) und nicht als `root`. Für systemkritische Befehle (Reboot/Shutdown) wird dem Nutzer über die `/etc/sudoers` punktuell eine isolierte Ausnahmegenehmigung erteilt.
-* **Dateirechte anpassen:** Stellen Sie sicher, dass die Zugangsdaten in der `config.json` vor dem unbefugten Auslesen durch andere lokale Benutzer geschützt sind. Führen Sie dazu auf dem System den Befehl `chmod 600 config.json` aus.
-* **Standard-Passwörter ändern:** Ändern Sie zwingend die voreingestellten Werte für `ADMIN_USER` und `ADMIN_PASS` in der `config.json` vor der ersten produktiven Inbetriebnahme im Netzwerk.
-* **Versionskontrolle (.gitignore):** Sollten Sie eigene Anpassungen an diesem Code-Repository vornehmen und dieses veröffentlichen wollen, stellen Sie sicher, dass die Datei `config.json` sowie etwaige Log-Dateien durch die `.gitignore` vom Upload ausgeschlossen sind. Reale Schul-, Nutzer- oder Zugangsdaten dürfen nicht in öffentliche Repositories gelangen.
-
 ### **Beispielkonfiguration:**
 
 ```json
@@ -89,3 +82,15 @@ Das Programm erfordert eine Konfigurationsdatei namens `config.json` im Hauptver
         ]
     }
 }
+```
+
+### **🔒 Wichtige Hinweise zu Datenschutz und Sicherheit**
+
+1. **Principle of Least Privilege (PoLP):** Der Webserver läuft aus Sicherheitsgründen als eingeschränkter Standardnutzer (pi) und nicht als root. Für systemkritische Befehle (Reboot/Shutdown) wird dem Nutzer über die /etc/sudoers punktuell eine isolierte Ausnahmegenehmigung erteilt.  
+2. **Dateirechte anpassen:** Stellen Sie sicher, dass die Zugangsdaten in der config.json vor dem unbefugten Auslesen durch andere lokale Benutzer geschützt sind. Führen Sie dazu auf dem System den Befehl chmod 600 config.json aus.  
+3. **Standard-Passwörter ändern:** Ändern Sie zwingend die voreingestellten Werte für ADMIN\_USER und ADMIN\_PASS in der config.json vor der ersten produktiven Inbetriebnahme im Netzwerk.  
+4. **Versionskontrolle (.gitignore):** Sollten Sie eigene Anpassungen an diesem Code-Repository vornehmen und dieses veröffentlichen wollen, stellen Sie sicher, dass die Datei config.json sowie etwaige Log-Dateien durch die .gitignore vom Upload ausgeschlossen sind. Reale Schul-, Nutzer- oder Zugangsdaten dürfen nicht in öffentliche Repositories gelangen.
+
+## **📝 Lizenz & Nutzung**
+
+Dieses Projekt ist Open Source und steht unter der [MIT-Lizenz](https://opensource.org/license/mit). Dieses Projekt kann für den schulischen und edukativen Bereich frei genutzt, modifiziert und weiterentwickelt werden. Ideal geeignet als Praxisprojekt für den Informatikunterricht\! 
