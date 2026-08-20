@@ -1347,4 +1347,3 @@ if __name__ == '__main__':
             else:
                 logging.error("WARNUNG: Display-Lock konnte beim Beenden nicht erlangt werden.")
         sys.exit(0)
-```eof
