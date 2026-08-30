@@ -16,7 +16,7 @@ fi
 
 # Vorab-Prüfungen (Pre-Flight Checks)
 if [ ! -f "config.json" ]; then
-    echo "[FEHLER] config.json fehlt! Bitte config_example.json kopieren und anpassen."
+    echo "[FEHLER] config.json fehlt! Bitte config.example.json kopieren und anpassen."
     exit 1
 fi
 
