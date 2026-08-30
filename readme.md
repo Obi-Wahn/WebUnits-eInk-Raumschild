@@ -9,6 +9,7 @@ Dieses Projekt stellt ein automatisiertes, digitales Türschild für den Einsatz
 * **Automatisierte Synchronisation:** Abruf der aktuellen Plandaten über die WebUntis-API. Das Display zeigt übersichtlich die aktuell laufende Stunde ("JETZT") sowie die darauf folgende Belegung ("DANACH") an.
 * **Ausfall- und Vertretungserkennung:** Planänderungen wie Ausfälle oder Vertretungen werden durch spezifische WebUntis-Statuscodes erkannt und visuell hervorgehoben (z. B. durch invertierte Darstellung).
 * **Ressourcenschonender Ruhemodus:** Außerhalb der regulären Unterrichtszeiten (sowie an Wochenenden und Feiertagen) pausiert das System die regelmäßigen API-Abfragen und versetzt das Display in einen schonenden Standby-Modus.
+* **Offline-Rücklage bei Netzausfall:** Fällt das WLAN oder WebUntis aus, ersetzt das Display den Stundenplan nicht durch eine Fehlermeldung, sondern zeigt den zuletzt abgerufenen Tagesplan weiter. Dieser wird dabei lokal neu ausgewertet, sodass auch während der Störung zur richtigen Zeit auf die nächste Stunde gewechselt wird. Ein kleines Ausrufezeichen in der Kopfzeile (und ein Hinweis im Web-Interface) kennzeichnet die Daten als möglicherweise nicht mehr taggenau. Dauerhafte Fehler wie ein falsches Passwort bleiben dagegen sichtbar, damit sie behoben werden.
 * **Hardware-Interaktion:** Über einen kapazitiven Touch-Sensor (via I2C) kann jederzeit ein sofortiges manuelles Update des Displays erzwungen werden.
 * **Responsives & Sicheres Administrations-Interface:** Die Verwaltung erfolgt über ein lokales Web-Interface. Dank modernem **CSS-Grid** und **Mobile-First-Ansatz** passt sich das Layout perfekt an: Auf dem Smartphone fließen die Bedienelemente logisch untereinander, auf einem Desktop-Monitor entfaltet sich ein Zwei-Spalten-Cockpit. Abgesichert ist das Ganze durch Nginx als Reverse Proxy (HTTPS/SSL) sowie HTTP Basic Authentication.
 * **Sichere Systemsteuerung & Architektur:** Über das Web-Interface lässt sich der Raspberry Pi per Knopfdruck sicher neu starten oder herunterfahren. Zustandsändernde Aktionen sind durch POST-Requests (CSRF-Schutz) gesichert. Schreibvorgänge in die Konfigurationsdatei erfolgen atomar, um Datenkorruption bei plötzlichem Stromausfall zu vermeiden.
@@ -33,6 +34,9 @@ Das Projekt baut auf einer Reihe von Systempaketen und Python-Bibliotheken auf:
 * `nginx`, `openssl`: Bereitstellung der sicheren HTTPS-Verbindung (Reverse Proxy).
 
 **Python-Bibliotheken:**
+
+Die exakten, getesteten Versionen sind in der Datei [`requirements.txt`](./requirements.txt) hinterlegt und werden mit `pip install -r requirements.txt` installiert.
+
 
 * [**python-webuntis**](https://github.com/python-webuntis/python-webuntis): Schnittstelle zur WebUntis-API.
 * [**Pillow (PIL)**](https://python-pillow.github.io/): Generierung des Bildmaterials und des Layouts für das Display.

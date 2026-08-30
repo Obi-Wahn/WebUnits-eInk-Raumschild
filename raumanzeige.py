@@ -101,6 +101,14 @@ TOUCH_I2C_ADDR = 0x14           # Hexadezimale I2C-Adresse des Touch-Chips
 TOUCH_COOLDOWN = 5.0            # Entprell-Zeit in Sekunden (verhindert Touch-Spam)
 HOLIDAYS_CACHE_SECONDS = 86400  # API-Schonung: Ferien für 24 Stunden im RAM cachen
 
+# Fehlermeldungen, die auf eine *vorübergehende* Störung hindeuten (Netz/Server).
+# Nur bei diesen greifen wir auf den zuletzt abgerufenen Tagesplan zurück.
+# Konfigurationsfehler (falsches Passwort, fehlender Raum) sind dagegen dauerhaft
+# und müssen sichtbar bleiben, damit sie überhaupt jemand behebt.
+ERR_NO_NETWORK = "Kein WLAN/Internet"
+ERR_UNTIS_OFFLINE = "WebUntis offline"
+TRANSIENT_ERRORS = {ERR_NO_NETWORK, ERR_UNTIS_OFFLINE}
+
 # Magic Numbers (Festgelegte Layout-Werte für das E-Paper-Display)
 UI_WIDTH = 250
 UI_HEIGHT = 122
@@ -154,6 +162,14 @@ class AppState:
         self.cached_holidays = None
         self.last_holidays_fetch: float = 0
         self.global_fonts: Dict[str, ImageFont.FreeTypeFont] = {}
+
+        # Offline-Rücklage: der zuletzt erfolgreich abgerufene Tagesplan.
+        # Fällt WLAN oder WebUntis aus, zeigen wir weiter diesen Plan an,
+        # statt eine Fehlermeldung über gültige Unterrichtsdaten zu legen.
+        self.cached_timetable = None
+        self.cached_timetable_date: Optional[datetime.date] = None
+        self.last_successful_sync: Optional[datetime.datetime] = None
+        self.data_is_stale: bool = False
         
         # Security: Rate-Limiting gegen Brute-Force-Angriffe (IP -> {count, lockout_until})
         self.failed_logins: Dict[str, Dict[str, float]] = {}
@@ -339,6 +355,98 @@ def parse_lesson(lesson, conf: Dict[str, Any]) -> Optional[Lesson]:
         stunden_info=" | ".join(info_parts)
     )
 
+def select_lessons(timetable, conf: Dict[str, Any], now: datetime.datetime) -> Tuple[Dict[str, Optional[Lesson]], str]:
+    """
+    Wählt aus einem bereits geladenen Tagesplan die Stunde aus, die JETZT läuft,
+    und die, die DANACH folgt. Erzeugt für unterrichtsfreie Zeiträume die
+    passende Ersatzmeldung (Pause, Freistunde, Unterrichtsende).
+
+    TECHNISCHER HINTERGRUND (Trennung von Laden und Auswerten):
+    Diese Funktion arbeitet rein lokal und braucht kein Netzwerk. Genau deshalb
+    ist sie von get_current_lesson() getrennt: Bei einem WLAN- oder WebUntis-
+    Ausfall können wir sie erneut auf den zuletzt gespeicherten Tagesplan
+    anwenden. Das Display wechselt dann auch offline zur richtigen Zeit auf die
+    nächste Stunde, statt bei den Daten des Ausfallzeitpunkts stehenzubleiben.
+    """
+    if not timetable:
+        return {"current": None, "next": None}, "Unterrichtsfrei"
+
+    now_time = now.time()
+
+    # Wir sortieren chronologisch. Fallback auf datetime.max verhindert Abstürze
+    # bei beschädigten WebUntis-Einträgen, die kein Start-Datum haben.
+    timetable = sorted(timetable, key=lambda l: getattr(l, 'start', datetime.datetime.max))
+    current_lesson = None
+    next_lesson = None
+
+    for lesson in timetable:
+        if getattr(lesson, 'start', None) is None or getattr(lesson, 'end', None) is None:
+            continue
+
+        # 5-Minuten-Vorlauf: Das Display schaltet bereits 5 Min vor dem Klingeln auf die neue Stunde um
+        lesson_start_buffered = lesson.start - datetime.timedelta(minutes=5)
+
+        if lesson_start_buffered <= now <= lesson.end:
+            current_lesson = lesson
+        elif lesson.start > now and next_lesson is None:
+            next_lesson = lesson
+
+    message = ""
+    # Freistunden / Pausen generieren
+    if current_lesson is None:
+        schedule = conf.get("SCHEDULE", {})
+        try:
+            ds_h, ds_m = map(int, schedule.get("DAY_START", "07:55").split(":"))
+            de_h, de_m = map(int, schedule.get("DAY_END", "15:30").split(":"))
+
+            if now_time < datetime.time(ds_h, ds_m):
+                message = "Guten Morgen!"
+            elif now_time >= datetime.time(de_h, de_m):
+                message = "Unterrichtsende"
+            else:
+                message = "Raum ist frei"
+                # Befindet sich die aktuelle Zeit in einem definierten Pausen-Slot?
+                for b in schedule.get("BREAKS", []):
+                    bs_h, bs_m = map(int, str(b.get("start", "00:00")).split(":"))
+                    be_h, be_m = map(int, str(b.get("end", "00:00")).split(":"))
+                    if datetime.time(bs_h, bs_m) <= now_time < datetime.time(be_h, be_m):
+                        message = b.get("name", "Pause")
+                        break
+        except Exception as e:
+            logging.warning(f"Zeit-Parsing Fehler: {e}")
+            message = "Raum ist frei"
+
+    return {
+        "current": parse_lesson(current_lesson, conf),
+        "next": parse_lesson(next_lesson, conf)
+    }, message
+
+def get_offline_fallback(conf: Dict[str, Any]) -> Optional[Tuple[Dict[str, Optional[Lesson]], str]]:
+    """
+    Liefert die Anzeige aus dem zuletzt erfolgreich abgerufenen Tagesplan.
+
+    PÄDAGOGISCHER HINTERGRUND (Ausfallsicherheit):
+    Ein kurzer WLAN-Aussetzer soll den kompletten Stundenplan nicht durch eine
+    Fehlermeldung ersetzen - für die Person vor der Tür ist ein leicht
+    veralteter Plan deutlich nützlicher als "WebUntis offline".
+    Wir geben den Plan nur zurück, wenn er vom selben Kalendertag stammt.
+    Der Plan von gestern wäre schlicht falsch, und eine falsche Anzeige ist
+    schlechter als gar keine.
+
+    Rückgabe: (daten, meldung) oder None, wenn keine brauchbare Rücklage existiert.
+    """
+    now = get_now()
+    with app_state.state_lock:
+        cached_timetable = app_state.cached_timetable
+        cached_date = app_state.cached_timetable_date
+
+    if cached_timetable is None or cached_date != now.date():
+        return None
+
+    # Neu auswerten statt die alte Anzeige zu konservieren: So stimmt auch
+    # während des Ausfalls noch, welche Stunde gerade läuft.
+    return select_lessons(cached_timetable, conf, now)
+
 def get_current_lesson(conf: Dict[str, Any]) -> Tuple[Optional[Dict[str, Optional[Lesson]]], str]:
     """
     Hauptfunktion der Daten-Ebene: Verbindet sich mit der WebUntis-API, lädt den
@@ -373,7 +481,6 @@ def get_current_lesson(conf: Dict[str, Any]) -> Tuple[Optional[Dict[str, Optiona
         
         now = get_now()
         today = now.date()
-        now_time = now.time()
 
         # ----------------------------------------------------------------------
         # PÄDAGOGISCHER HINTERGRUND: Ferien-Erkennung & API-Schonung
@@ -415,68 +522,26 @@ def get_current_lesson(conf: Dict[str, Any]) -> Tuple[Optional[Dict[str, Optiona
             logging.error(f"Unerwarteter WebUntis Stundenplan-Fehler: {e}")
             raise e
             
-        if not timetable:
-            return {"current": None, "next": None}, "Unterrichtsfrei"
-            
-        # Wir sortieren chronologisch. Fallback auf datetime.max verhindert Abstürze 
-        # bei beschädigten WebUntis-Einträgen, die kein Start-Datum haben.
-        timetable = sorted(timetable, key=lambda l: getattr(l, 'start', datetime.datetime.max))
-        current_lesson = None
-        next_lesson = None
-        
-        for lesson in timetable:
-            if getattr(lesson, 'start', None) is None or getattr(lesson, 'end', None) is None:
-                continue
-                
-            # 5-Minuten-Vorlauf: Das Display schaltet bereits 5 Min vor dem Klingeln auf die neue Stunde um
-            lesson_start_buffered = lesson.start - datetime.timedelta(minutes=5)
-            
-            if lesson_start_buffered <= now <= lesson.end:
-                current_lesson = lesson
-            elif lesson.start > now and next_lesson is None:
-                next_lesson = lesson
+        # Abruf erfolgreich: Tagesplan als Offline-Rücklage sichern, damit ein
+        # späterer Netzausfall die Anzeige nicht wertlos macht.
+        with app_state.state_lock:
+            app_state.cached_timetable = timetable
+            app_state.cached_timetable_date = today
+            app_state.last_successful_sync = now
 
-        message = ""
-        # Freistunden / Pausen generieren
-        if current_lesson is None:
-            schedule = conf.get("SCHEDULE", {})
-            try:
-                ds_h, ds_m = map(int, schedule.get("DAY_START", "07:55").split(":"))
-                de_h, de_m = map(int, schedule.get("DAY_END", "15:30").split(":"))
-                
-                if now_time < datetime.time(ds_h, ds_m):
-                    message = "Guten Morgen!"
-                elif now_time >= datetime.time(de_h, de_m):
-                    message = "Unterrichtsende"
-                else:
-                    message = "Raum ist frei"
-                    # Befindet sich die aktuelle Zeit in einem definierten Pausen-Slot?
-                    for b in schedule.get("BREAKS", []):
-                        bs_h, bs_m = map(int, str(b.get("start", "00:00")).split(":"))
-                        be_h, be_m = map(int, str(b.get("end", "00:00")).split(":"))
-                        if datetime.time(bs_h, bs_m) <= now_time < datetime.time(be_h, be_m):
-                            message = b.get("name", "Pause")
-                            break
-            except Exception as e:
-                logging.warning(f"Zeit-Parsing Fehler: {e}")
-                message = "Raum ist frei"
+        return select_lessons(timetable, conf, now)
 
-        return {
-            "current": parse_lesson(current_lesson, conf),
-            "next": parse_lesson(next_lesson, conf)
-        }, message
-        
     except Exception as e:
         # PÄDAGOGISCHER HINTERGRUND: Spezifisches Error-Handling
         # Hier geben wir je nach Fehlerbild sprechende Strings an das E-Paper zurück.
         error_msg = str(e)
         logging.error(f"WebUntis API Fehler: {error_msg}")
         if "HTTPSConnectionPool" in error_msg or "NameResolutionError" in error_msg or "Max retries" in error_msg or "timeout" in error_msg.lower():
-            return None, "Kein WLAN/Internet"
+            return None, ERR_NO_NETWORK
         elif "LoginError" in error_msg or "Unauthorized" in error_msg:
             return None, "Untis-Login falsch"
         else:
-            return None, "WebUntis offline"
+            return None, ERR_UNTIS_OFFLINE
     finally:
         socket.setdefaulttimeout(old_timeout)
         if session:
@@ -540,10 +605,15 @@ def draw_lesson_block(draw: ImageDraw.ImageDraw, lesson: Lesson, y_offset: int, 
     detail_str = " | ".join(details)
     draw.text((UI_MARGIN, y_details), detail_str, font=f_small, fill=0)
 
-def update_display_logic(data: Optional[Dict[str, Optional[Lesson]]], message: str, conf: Dict[str, Any]) -> None:
+def update_display_logic(data: Optional[Dict[str, Optional[Lesson]]], message: str, conf: Dict[str, Any], stale: bool = False) -> None:
     """
     Erstellt ein 1-Bit (Schwarz/Weiß) Bitmap-Bild des Stundenplans und sendet
     es an den Hardware-Controller des Waveshare E-Paper-Displays.
+
+    'stale' markiert Daten, die aus der Offline-Rücklage stammen (WebUntis war
+    nicht erreichbar). In dem Fall setzen wir ein kleines Ausrufezeichen in die
+    Kopfzeile: Der Plan stimmt sehr wahrscheinlich noch, könnte aber eine
+    kurzfristige Änderung von heute nicht enthalten.
     """
     if app_state.shutdown_event.is_set(): return 
     message = message or "" 
@@ -577,6 +647,13 @@ def update_display_logic(data: Optional[Dict[str, Optional[Lesson]]], message: s
             draw.text((UI_MARGIN, 3), conf.get('ROOM_NAME', 'Unbekannt'), font=f_med, fill=255)
             time_str = now.strftime("%d.%m.%Y %H:%M")
             draw.text((120, 5), time_str, font=f_small, fill=255)
+
+            # Offline-Hinweis: invertiertes Ausrufezeichen ganz rechts in der Kopfzeile.
+            # Bewusst sehr klein gehalten - auf 250x122 Pixeln ist jeder Pixel knapp,
+            # und der Stundenplan selbst bleibt die wichtigere Information.
+            if stale:
+                draw.rectangle((UI_WIDTH - 13, 4, UI_WIDTH - 3, UI_HEADER_HEIGHT - 5), fill=255)
+                draw.text((UI_WIDTH - 10, 4), "!", font=f_small, fill=0)
 
             # --- HAUPTBEREICH (Unterricht) ---
             if data and (data.get('current') or data.get('next')):
@@ -762,6 +839,8 @@ def background_loop() -> None:
                 app_state.force_update_flag = False
             
             if conf.get('DISPLAY_ACTIVE', True):
+                is_stale = False
+
                 if current_show_demo:
                     data = {
                         "current": Lesson("Informatik", "Informatik", "Ab", "11B", "09:55 - 10:40", "3. Std.", "irregular", "Theorieunterricht - Netzwerktechnik"),
@@ -772,11 +851,22 @@ def background_loop() -> None:
                         app_state.show_demo_once = False
                 else:
                     data, err = get_current_lesson(conf)
-                
+
+                    # Ausfallsicherheit: Bei einer vorübergehenden Störung lieber den
+                    # zuletzt abgerufenen Tagesplan weiterzeigen als eine Fehlermeldung.
+                    if data is None and err in TRANSIENT_ERRORS:
+                        fallback = get_offline_fallback(conf)
+                        if fallback is not None:
+                            logging.warning(f"WebUntis nicht erreichbar ({err}) - "
+                                            "zeige zuletzt abgerufene Plandaten.")
+                            data, err = fallback
+                            is_stale = True
+
                 # Cachen der Ergebnisse für das Webinterface
                 with app_state.state_lock:
                     app_state.current_display_data = data
                     app_state.current_display_msg = err
+                    app_state.data_is_stale = is_stale
 
                 current_date = current_dt.strftime("%Y-%m-%d")
                 is_static_day = err in ["Schönes Wochenende!", "Unterrichtsfrei"] or (isinstance(err, str) and "Ferien" in err)
@@ -789,7 +879,7 @@ def background_loop() -> None:
                 else: last_static_date = None 
                     
                 if not skip_update:
-                    update_display_logic(data, err, conf)
+                    update_display_logic(data, err, conf, stale=is_stale)
             else:
                 clear_display_once()
                 
@@ -939,6 +1029,7 @@ HTML_TEMPLATE = """
         .lesson-block { background: #f8fafc; border-radius: 10px; padding: 15px; margin-top: 10px; border: 1px solid #e2e8f0; }
         .empty-state { text-align: center; color: #94a3b8; font-size: 13px; padding: 20px; background: #f8fafc; border-radius: 10px; margin-top: 10px; font-weight: bold; }
         .error-msg { background-color: #fee2e2; color: #dc2626; padding: 15px; border-radius: 10px; font-size: 13px; font-weight: bold; text-align: center; margin-bottom: 20px; }
+        .warn-msg { background-color: #fef3c7; color: #854d0e; padding: 15px; border-radius: 10px; font-size: 13px; font-weight: bold; text-align: center; margin-bottom: 20px; line-height: 1.5; }
         .footer { text-align: center; font-size: 10px; color: #cbd5e1; margin-top: 35px; text-transform: uppercase; letter-spacing: 1px; }
         
         .tag-red { background-color: #fee2e2; color: #dc2626; padding: 4px 8px; border-radius: 5px; font-size: 11px; font-weight: bold; text-transform: uppercase; margin-bottom: 6px; display: inline-block;}
@@ -967,6 +1058,15 @@ HTML_TEMPLATE = """
         <div class="content">
             {% if conf|length == 0 %}
                 <div class="error-msg">Konfigurationsfehler! Die Datei 'config.json' konnte nicht gelesen werden.</div>
+            {% endif %}
+
+            {% if stale %}
+                <div class="warn-msg">
+                    WebUntis ist derzeit nicht erreichbar.<br>
+                    Angezeigt wird der zuletzt abgerufene Plan von heute &ndash; kurzfristige
+                    Aenderungen koennen darin fehlen.
+                    {% if last_sync %}<br>Letzter erfolgreicher Abruf: {{ last_sync }}{% endif %}
+                </div>
             {% endif %}
             
             <div class="dashboard-grid">
@@ -1137,7 +1237,14 @@ def index():
         d_data = app_state.current_display_data
         d_msg_raw = app_state.current_display_msg
         c_token = app_state.csrf_token
-        
+        is_stale = app_state.data_is_stale
+        sync_dt = app_state.last_successful_sync
+
+    # Zeitstempel des letzten geglückten API-Abrufs (nur relevant, wenn wir
+    # gerade aus der Offline-Rücklage anzeigen).
+    last_sync = sync_dt.strftime("%d.%m.%Y %H:%M") if sync_dt else None
+
+
     # PÄDAGOGISCHER HINTERGRUND (Sicherheit gegen XSS):
     # Um zu verhindern, dass externe API-Daten schadhaften HTML-Code in unser
     # Dashboard einschleusen (Cross-Site Scripting), escapen wir den Text zuerst.
@@ -1154,7 +1261,9 @@ def index():
         msg=d_msg_safe, 
         now=display_time,
         sim_active=is_simulated,
-        csrf_token=c_token
+        csrf_token=c_token,
+        stale=is_stale,
+        last_sync=last_sync
     )
 
 @app.route('/simulate_time', methods=['POST'])

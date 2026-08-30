@@ -1,0 +1,42 @@
+# ==============================================================================
+# Python-Abhaengigkeiten der WebUntis E-Paper-Raumanzeige
+# ==============================================================================
+# Installation (innerhalb der virtuellen Umgebung):
+#     pip install -r requirements.txt
+#
+# Die Versionen sind bewusst exakt festgelegt ("gepinnt"), damit eine
+# Neuinstallation auch in einigen Jahren noch exakt dieselbe, getestete
+# Umgebung erzeugt. Ein unbemerktes Upgrade einer Bibliothek kann sonst
+# das Programm brechen (Beispiel: Pillow hat die frueher genutzte Methode
+# draw.textsize() in neueren Versionen ersatzlos entfernt).
+#
+# Voraussetzung: Python 3.10 oder neuer (Raspberry Pi OS Bookworm liefert 3.11).
+# ------------------------------------------------------------------------------
+
+# --- Hardware-Ansteuerung (nur auf dem Raspberry Pi installierbar) ---
+RPi.GPIO==0.7.1          # GPIO-Pins (Reset-Leitung des Touch-Panels)
+spidev==3.8              # SPI-Bus, wird vom Waveshare-Treiber benoetigt
+smbus2==0.6.1            # I2C-Bus (kapazitiver Touch-Controller)
+
+# --- Daten & Darstellung ---
+webuntis==0.1.25         # Schnittstelle zur WebUntis-API
+Pillow==12.3.0           # Erzeugung des 1-Bit-Bitmaps fuer das E-Paper
+
+# --- Web-Interface ---
+Flask==3.1.3             # Routing und Jinja2-Templating des Admin-Interfaces
+waitress==3.0.2          # Produktionstauglicher WSGI-Server (statt Flask-Dev-Server)
+Werkzeug==3.1.8          # Passwort-Hashing (generate_password_hash)
+MarkupSafe==3.0.3        # Escaping der API-Texte im Dashboard (XSS-Schutz)
+
+# ------------------------------------------------------------------------------
+# HINWEIS zu RPi.GPIO:
+# Auf dem Raspberry Pi 5 funktioniert RPi.GPIO nicht mehr. Dort stattdessen
+# das API-kompatible Paket 'rpi-lgpio' installieren; der Programmcode bleibt
+# unveraendert. Auf dem hier empfohlenen Pi Zero 2 W ist RPi.GPIO korrekt.
+#
+# HINWEIS zur Entwicklung ohne Hardware:
+# Die drei Hardware-Pakete lassen sich auf einem Windows-/Mac-/x86-Linux-Rechner
+# nicht installieren. Das Programm faengt die fehlenden Module ab und laeuft im
+# Simulationsmodus weiter ("Graceful Degradation"), sodass sich das
+# Web-Interface auch ohne Raspberry Pi entwickeln laesst.
+# ------------------------------------------------------------------------------
