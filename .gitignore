@@ -1,0 +1,23 @@
+# Konfigurationsdatei mit echten Zugangsdaten (WebUntis-Login, Admin-Passwort)
+config.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtuelle Umgebung
+webuntis/
+venv/
+.venv/
+
+# Logs
+*.log
+
+# Waveshare Hardware-Treiber (wird per git clone separat installiert)
+e-Paper/
+
+# Editor-/OS-Artefakte
+.vscode/
+.idea/
+.DS_Store

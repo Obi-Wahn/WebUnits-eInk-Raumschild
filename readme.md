@@ -46,7 +46,7 @@ Eine vollständige, detaillierte Schritt-für-Schritt-Anleitung zur Einrichtung 
 
 ## **⚙️ Konfiguration**
 
-Das Programm erfordert eine Konfigurationsdatei namens `config.json` im Hauptverzeichnis. Nutzen Sie die bereitgestellte Datei `config_example.json` als Vorlage.
+Das Programm erfordert eine Konfigurationsdatei namens `config.json` im Hauptverzeichnis. Nutzen Sie die bereitgestellte Datei `config.example.json` als Vorlage.
 
 ### **Beispielkonfiguration:**
 
