@@ -1460,20 +1460,42 @@ if __name__ == '__main__':
         # Hintergrundschleife für API-Pulls als asynchronen Dämonen-Thread starten
         threading.Thread(target=background_loop, daemon=True).start()
             
-        # Zwei Adressen, zwei Wege: Waitress lauscht bewusst NUR auf dem
-        # Localhost. Von anderen Rechnern aus führt der Weg zwingend über
-        # Nginx (Port 443), das die Verbindung per HTTPS absichert.
-        # Deshalb genügt die Localhost-Adresse allein nicht als Hinweis.
-        logging.info(" * Admin-Interface (auf dem Pi):  http://127.0.0.1:5000")
+        # An welche Netzwerkkarte binden wir uns? Voreinstellung ist der
+        # Localhost: Dann ist das Interface nur auf dem Pi selbst erreichbar,
+        # und der Zugriff von aussen laeuft zwingend ueber den Reverse Proxy
+        # (Nginx), der die Verbindung verschluesselt. Wer keinen Proxy
+        # einsetzt, kann in der config.json "WEB_HOST": "0.0.0.0" setzen -
+        # siehe die Warnung weiter unten.
+        conf_start = get_cached_config()
+        web_host = str(conf_start.get('WEB_HOST', '127.0.0.1')).strip() or '127.0.0.1'
+        is_loopback = web_host in ('127.0.0.1', 'localhost', '::1')
         local_ip = get_local_ip()
-        if local_ip:
-            logging.info(f" * Admin-Interface (im Netzwerk): https://{local_ip}  (über Nginx)")
+
+        logging.info(" * Admin-Interface (auf dem Pi):  http://127.0.0.1:5000")
+
+        if not is_loopback:
+            # Direkt im Netz erreichbar: Hier kennen wir das Protokoll sicher,
+            # denn Waitress selbst spricht ausschliesslich unverschluesseltes HTTP.
+            if local_ip:
+                logging.info(f" * Admin-Interface (im Netzwerk): http://{local_ip}:5000")
+            logging.warning(
+                " * ACHTUNG: WEB_HOST ist offen konfiguriert. Das Interface ist ohne "
+                "Verschluesselung im Netzwerk erreichbar; das Admin-Passwort wird bei "
+                "jedem Aufruf praktisch im Klartext uebertragen."
+            )
+        elif local_ip:
+            # Hinter einem Reverse Proxy: Wir nennen nur die Adresse, nicht das
+            # Protokoll - ob dort HTTP oder HTTPS und welcher Port konfiguriert
+            # ist, weiss dieses Programm nicht.
+            logging.info(f" * Dieser Pi im Netzwerk: {local_ip}")
+            logging.info("   (Zugriff von anderen Rechnern ueber den Reverse Proxy, "
+                         "siehe Installationsanleitung)")
         else:
             logging.warning(" * Keine Netzwerkadresse gefunden - besteht eine WLAN-Verbindung?")
 
         # Flasks eingebauter Server ist nicht netzwerksicher. Daher wickelt
         # 'Waitress' als robuster WSGI-Server die HTTP-Requests ab.
-        serve(app, host='127.0.0.1', port=5000)
+        serve(app, host=web_host, port=5000)
         
     except KeyboardInterrupt:
         # Fängt das STRG+C Signal des Nutzers im Terminal ab
