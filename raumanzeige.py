@@ -101,6 +101,16 @@ TOUCH_I2C_ADDR = 0x14           # Hexadezimale I2C-Adresse des Touch-Chips
 TOUCH_COOLDOWN = 5.0            # Entprell-Zeit in Sekunden (verhindert Touch-Spam)
 HOLIDAYS_CACHE_SECONDS = 86400  # API-Schonung: Ferien für 24 Stunden im RAM cachen
 
+# Grenzen für das automatische Abrufintervall.
+# Der Mindestwert schützt den WebUntis-Server: Wenn an einer Schule dutzende
+# Türschilder hängen, summieren sich zu kurze Intervalle zu erheblicher Last,
+# und die Schule riskiert eine Drosselung oder Sperre.
+# Kurze Intervalle bringen ohnehin kaum etwas, denn das Display aktualisiert
+# sich zusätzlich zu jedem Stunden- und Pausenbeginn sowie bei Berührung.
+MIN_UPDATE_SECONDS = 300        # 5 Minuten
+MAX_UPDATE_SECONDS = 86400      # 24 Stunden
+DEFAULT_UPDATE_SECONDS = 900    # 15 Minuten
+
 # Fehlermeldungen, die auf eine *vorübergehende* Störung hindeuten (Netz/Server).
 # Nur bei diesen greifen wir auf den zuletzt abgerufenen Tagesplan zurück.
 # Konfigurationsfehler (falsches Passwort, fehlender Raum) sind dagegen dauerhaft
@@ -115,6 +125,15 @@ UI_HEIGHT = 122
 UI_HEADER_HEIGHT = 24
 UI_LINE_Y = 68
 UI_MARGIN = 5
+UI_BADGE_PADDING = 3            # Luft links und rechts im Status-Kasten
+UI_BADGE_GAP = 5                # Abstand zwischen Status-Kasten und Fachname
+
+# Beschriftung der invertierten Status-Kästen. Die Kastenbreite wird zur
+# Laufzeit aus der Textbreite berechnet, diese Texte sind also frei änderbar.
+STATUS_LABELS = {
+    'cancelled': "AUSFALL",
+    'irregular': "VERTRETUNG",
+}
 
 @dataclass
 class Lesson:
@@ -226,6 +245,22 @@ def save_config(config: Dict[str, Any]) -> None:
             app_state.last_config_mtime = 0 
         except Exception as e:
             logging.error(f"FEHLER beim Speichern der config.json: {e}")
+
+def get_update_interval(conf: Dict[str, Any]) -> int:
+    """
+    Liefert das Abrufintervall in Sekunden, begrenzt auf einen sinnvollen Bereich.
+
+    Die Begrenzung sitzt bewusst hier und nicht nur im Web-Formular: Die
+    config.json lässt sich auch von Hand bearbeiten, und ein dort eingetragener
+    Wert von 5 Sekunden würde den WebUntis-Server unnötig belasten. Ein
+    unbrauchbarer Eintrag (Text, leer) fällt auf die Voreinstellung zurück,
+    statt das Programm mit einer Ausnahme zu beenden.
+    """
+    try:
+        val = int(conf.get('AUTO_UPDATE_SECONDS', DEFAULT_UPDATE_SECONDS))
+    except (TypeError, ValueError):
+        return DEFAULT_UPDATE_SECONDS
+    return max(MIN_UPDATE_SECONDS, min(val, MAX_UPDATE_SECONDS))
 
 def get_now() -> datetime.datetime:
     """
@@ -582,18 +617,25 @@ def draw_lesson_block(draw: ImageDraw.ImageDraw, lesson: Lesson, y_offset: int, 
         fach_anzeige = "Kein Fach"
         
     # ZEILE 1: Tag (Ausfall/Vertretung) und das Fach
-    if status == 'cancelled':
-        # "FÄLLT AUS" wurde zu "AUSFALL" gekürzt, damit längere Fachnamen daneben passen
-        draw.rectangle((UI_MARGIN, y_content, 65, y_content + 14), fill=0)
-        draw.text((UI_MARGIN + 3, y_content + 1), "AUSFALL", font=f_small, fill=255) 
-        draw.text((70, y_content), fach_anzeige, font=f_reg, fill=0)
-    elif status == 'irregular':
-        draw.rectangle((UI_MARGIN, y_content, 82, y_content + 14), fill=0)
-        draw.text((UI_MARGIN + 3, y_content + 1), "VERTRETUNG", font=f_small, fill=255)
-        draw.text((87, y_content), fach_anzeige, font=f_reg, fill=0)
+    # "FÄLLT AUS" wurde zu "AUSFALL" gekürzt, damit längere Fachnamen daneben passen.
+    label = STATUS_LABELS.get(status)
+
+    if label:
+        # Die Breite des schwarzen Kastens wird aus der tatsächlichen Textbreite
+        # berechnet, statt sie fest im Code zu hinterlegen. Feste Pixelwerte
+        # passen immer nur zu genau einer Schriftart in genau einer Größe und
+        # zu genau diesem einen Wort - schon eine Übersetzung des Etiketts oder
+        # eine andere Schrift würde den Text sonst aus dem Kasten laufen lassen.
+        label_w = get_text_width(draw, label, f_small)
+        box_right = UI_MARGIN + label_w + 2 * UI_BADGE_PADDING
+        draw.rectangle((UI_MARGIN, y_content, box_right, y_content + 14), fill=0)
+        draw.text((UI_MARGIN + UI_BADGE_PADDING, y_content + 1), label, font=f_small, fill=255)
+        fach_x = box_right + UI_BADGE_GAP
     else:
-        # Regulärer Unterricht
-        draw.text((UI_MARGIN, y_content), fach_anzeige, font=f_reg, fill=0)
+        # Regulärer Unterricht: Das Fach beginnt direkt am linken Rand.
+        fach_x = UI_MARGIN
+
+    draw.text((fach_x, y_content), fach_anzeige, font=f_reg, fill=0)
         
     # ZEILE 2: Zusatzinfos (Klasse, Lehrer, Info-Text)
     y_details = y_content + 13
@@ -828,7 +870,7 @@ def background_loop() -> None:
 
         # Logik: Update erforderlich?
         is_exact_time = (current_hm in dyn_update_times) and (last_minute_triggered != current_hm)
-        is_interval_reached = (now_time_system - last_update >= conf.get('AUTO_UPDATE_SECONDS', 900)) and is_active_hours
+        is_interval_reached = (now_time_system - last_update >= get_update_interval(conf)) and is_active_hours
 
         # Update ausführen
         if current_force_update or is_interval_reached or is_exact_time:
@@ -900,15 +942,26 @@ def check_auth(username, password) -> bool:
     Überprüft die HTTP Basic Auth Zugangsdaten.
     
     TECHNISCHER HINTERGRUND (Kryptographie):
-    Passwörter sollten niemals im Klartext gespeichert werden! 
-    Wir nutzen 'werkzeug.security', um das Klartext-Passwort aus der config.json 
-    beim ersten Start einmalig in einen Einweg-Hash umzuwandeln (Auto-Migration). 
+    Passwörter sollten niemals im Klartext gespeichert werden!
+    Wir nutzen 'werkzeug.security', um das Klartext-Passwort aus der config.json
+    beim ersten Start einmalig in einen Einweg-Hash umzuwandeln (Auto-Migration).
     Selbst wenn Hacker die SD-Karte stehlen, sehen sie nur den Hash.
+
+    TECHNISCHER HINTERGRUND (Timing-Angriffe):
+    Ein gewöhnlicher Textvergleich mit '==' bricht beim ersten abweichenden
+    Zeichen ab. Ein falscher Name ist dadurch je nach Eingabe minimal
+    unterschiedlich schnell abgelehnt - über sehr viele Messungen lässt sich
+    daraus der hinterlegte Benutzername Zeichen für Zeichen erraten.
+    secrets.compare_digest() vergleicht stattdessen immer über die volle Länge
+    und benötigt so stets gleich lange.
+    Aus demselben Grund prüfen wir Name UND Passwort immer beide, statt die
+    Passwortprüfung bei falschem Namen zu überspringen: Sonst wäre an der
+    Antwortzeit ablesbar, ob der Benutzername existiert.
     """
     conf = get_cached_config()
     u = conf.get('ADMIN_USER', 'admin')
     saved_pass = conf.get('ADMIN_PASS', 'tuerschild')
-    
+
     if not saved_pass.startswith('scrypt:') and not saved_pass.startswith('pbkdf2:'):
         logging.info("Klartext-Passwort entdeckt. Wird verschlüsselt und gespeichert...")
         hashed_pass = generate_password_hash(saved_pass)
@@ -916,7 +969,11 @@ def check_auth(username, password) -> bool:
         save_config(conf)
         saved_pass = hashed_pass
 
-    return username == u and check_password_hash(saved_pass, password)
+    # Fehlende Angaben zu "" machen: compare_digest und check_password_hash
+    # erwarten Text und wuerfen bei None eine Ausnahme.
+    user_ok = secrets.compare_digest(str(username or ''), str(u))
+    pass_ok = check_password_hash(saved_pass, str(password or ''))
+    return user_ok and pass_ok
 
 def authenticate():
     """Gibt den HTTP 401 Fehler (Unauthorized) an den Browser zurück, der daraufhin nach Passwörtern fragt."""
@@ -1102,8 +1159,8 @@ HTML_TEMPLATE = """
                             <input type="text" name="ROOM_NAME" value="{{ conf.get('ROOM_NAME', '') }}">
                         </div>
                         <div class="form-group">
-                            <label>Intervall (Sekunden)</label>
-                            <input type="number" name="AUTO_UPDATE_SECONDS" value="{{ conf.get('AUTO_UPDATE_SECONDS', 900) }}" min="60">
+                            <label>Intervall (Sekunden, mind. {{ min_interval }})</label>
+                            <input type="number" name="AUTO_UPDATE_SECONDS" value="{{ conf.get('AUTO_UPDATE_SECONDS', 900) }}" min="{{ min_interval }}" max="{{ max_interval }}">
                         </div>
                         <button type="submit" class="btn btn-save">Speichern</button>
                     </form>
@@ -1263,7 +1320,9 @@ def index():
         sim_active=is_simulated,
         csrf_token=c_token,
         stale=is_stale,
-        last_sync=last_sync
+        last_sync=last_sync,
+        min_interval=MIN_UPDATE_SECONDS,
+        max_interval=MAX_UPDATE_SECONDS
     )
 
 @app.route('/simulate_time', methods=['POST'])
@@ -1298,8 +1357,8 @@ def save():
     if conf:
         conf['ROOM_NAME'] = request.form.get('ROOM_NAME')
         try:
-            val = int(request.form.get('AUTO_UPDATE_SECONDS', 900))
-            conf['AUTO_UPDATE_SECONDS'] = max(60, min(val, 86400)) 
+            val = int(request.form.get('AUTO_UPDATE_SECONDS', DEFAULT_UPDATE_SECONDS))
+            conf['AUTO_UPDATE_SECONDS'] = max(MIN_UPDATE_SECONDS, min(val, MAX_UPDATE_SECONDS))
         except Exception:
             pass
         save_config(conf)
