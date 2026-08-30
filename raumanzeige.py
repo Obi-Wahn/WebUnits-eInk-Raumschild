@@ -1471,9 +1471,21 @@ if __name__ == '__main__':
         is_loopback = web_host in ('127.0.0.1', 'localhost', '::1')
         local_ip = get_local_ip()
 
+        # Optionale, fest vorgegebene Adresse fuer abweichende Proxy-Aufbauten
+        # (anderer Port, eigener Hostname, nur HTTP). Fehlt das Schema, ergaenzen
+        # wir https:// - sonst erkennt das Terminal die Zeile nicht als Adresse.
+        public_url = str(conf_start.get('WEB_PUBLIC_URL', '')).strip()
+        if public_url and "://" not in public_url:
+            public_url = f"https://{public_url}"
+
+        # Alle Adressen werden bewusst als vollstaendige URL mit Schema
+        # ausgegeben. Nur dann erkennen sie die gaengigen Terminals als Link
+        # und man kann sie mit Strg+Klick direkt oeffnen.
         logging.info(" * Admin-Interface (auf dem Pi):  http://127.0.0.1:5000")
 
-        if not is_loopback:
+        if public_url:
+            logging.info(f" * Admin-Interface (im Netzwerk): {public_url}")
+        elif not is_loopback:
             # Direkt im Netz erreichbar: Hier kennen wir das Protokoll sicher,
             # denn Waitress selbst spricht ausschliesslich unverschluesseltes HTTP.
             if local_ip:
@@ -1484,12 +1496,10 @@ if __name__ == '__main__':
                 "jedem Aufruf praktisch im Klartext uebertragen."
             )
         elif local_ip:
-            # Hinter einem Reverse Proxy: Wir nennen nur die Adresse, nicht das
-            # Protokoll - ob dort HTTP oder HTTPS und welcher Port konfiguriert
-            # ist, weiss dieses Programm nicht.
-            logging.info(f" * Dieser Pi im Netzwerk: {local_ip}")
-            logging.info("   (Zugriff von anderen Rechnern ueber den Reverse Proxy, "
-                         "siehe Installationsanleitung)")
+            # Hinter dem Reverse Proxy aus der Installationsanleitung: Der
+            # lauscht auf Port 443 mit HTTPS. Weicht der eigene Aufbau davon ab,
+            # laesst sich die Adresse per WEB_PUBLIC_URL fest vorgeben.
+            logging.info(f" * Admin-Interface (im Netzwerk): https://{local_ip}  (ueber den Reverse Proxy)")
         else:
             logging.warning(" * Keine Netzwerkadresse gefunden - besteht eine WLAN-Verbindung?")
 
