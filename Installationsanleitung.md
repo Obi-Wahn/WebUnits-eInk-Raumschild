@@ -109,7 +109,9 @@ chmod 600 /home/pi/webuntis-display/config.json
 
 Der in Python integrierte Webserver (Waitress) wird ausschließlich an den Localhost (127.0.0.1) gebunden. Nginx übernimmt die Rolle des Reverse Proxys und sichert die Verbindung nach außen über HTTPS ab.
 
-*Betrieb ohne Reverse Proxy:* Wenn Sie diesen Schritt überspringen, ist das Web-Interface ausschließlich auf dem Raspberry Pi selbst erreichbar — nicht von anderen Rechnern im Netz. Soll es ohne Nginx dennoch im lokalen Netz erreichbar sein, setzen Sie in der `config.json` den Wert `"WEB_HOST": "0.0.0.0"`. Das Interface ist dann unter `http://<IP-des-Pi>:5000` erreichbar; die Adresse wird beim Programmstart im Log ausgegeben.
+Beim Programmstart wird die Adresse, unter der das Interface im Netz erreichbar ist, als vollständige URL ins Log geschrieben. In den meisten Terminals lässt sie sich per Strg+Klick direkt öffnen. Zugrunde gelegt wird dabei die hier beschriebene Einrichtung, also HTTPS auf Port 443. Weicht Ihr Aufbau davon ab (eigener Hostname, anderer Port, nur HTTP), tragen Sie die gewünschte Adresse in der `config.json` unter `"WEB_PUBLIC_URL"` ein, zum Beispiel `"WEB_PUBLIC_URL": "https://tuerschild.local"`. Dieser Wert wird dann unverändert ausgegeben.
+
+*Betrieb ohne Reverse Proxy:* Wenn Sie diesen Schritt überspringen, ist das Web-Interface ausschließlich auf dem Raspberry Pi selbst erreichbar — nicht von anderen Rechnern im Netz. Soll es ohne Nginx dennoch im lokalen Netz erreichbar sein, setzen Sie in der `config.json` den Wert `"WEB_HOST": "0.0.0.0"`. Das Interface ist dann unter `http://<IP-des-Pi>:5000` erreichbar; auch diese Adresse wird beim Start ausgegeben.
 
 **Bedenken Sie dabei:** Ohne Nginx entfällt die Verschlüsselung. Die HTTP Basic Authentication überträgt Benutzername und Passwort dann bei jedem Aufruf lediglich Base64-kodiert, also praktisch im Klartext — jeder im selben Netz kann sie mitlesen. Da sich über das Interface auch Neustart und Herunterfahren auslösen lassen, ist diese Variante nur für abgeschottete Netze vertretbar. In einem Schul-WLAN ist der Reverse Proxy aus Schritt 7 die richtige Wahl.
 
