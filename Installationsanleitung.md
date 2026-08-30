@@ -39,12 +39,14 @@ git clone https://github.com/waveshareteam/e-Paper.git
 
 ## **4. Python-Umgebung einrichten**
 
-Um Konflikte mit systemweiten Paketen zu vermeiden, wird eine virtuelle Python-Umgebung (venv) verwendet:
+Um Konflikte mit systemweiten Paketen zu vermeiden, wird eine virtuelle Python-Umgebung (venv) verwendet. Die benötigten Bibliotheken sind mit exakten Versionsnummern in der Datei `requirements.txt` hinterlegt. Dadurch entsteht bei jeder Neuinstallation dieselbe, getestete Umgebung, und ein späteres Update einer Bibliothek kann das Programm nicht unbemerkt brechen.
 
 python3 -m venv webuntis  
 source webuntis/bin/activate  
-pip install RPi.GPIO spidev Pillow webuntis flask waitress smbus2  
+pip install -r requirements.txt  
 deactivate
+
+*Hinweis:* Legen Sie die Datei `requirements.txt` aus diesem Repository zuvor im Projektverzeichnis ab. Auf einem Raspberry Pi 5 ersetzen Sie darin `RPi.GPIO` durch das API-kompatible Paket `rpi-lgpio`; der Programmcode bleibt unverändert.
 
 ## **5. Programmdateien und Konfiguration**
 
