@@ -1403,6 +1403,41 @@ def sys_shutdown():
 # ==============================================================================
 # 9. START-EBENE: HAUPTPROGRAMM (ENTRY POINT)
 # ==============================================================================
+def get_local_ip() -> Optional[str]:
+    """
+    Ermittelt die Adresse, unter der der Raspberry Pi im lokalen Netz
+    erreichbar ist (z. B. 192.168.1.42).
+
+    TECHNISCHER HINTERGRUND:
+    Ein Rechner besitzt meist mehrere Adressen (WLAN, LAN, Loopback). Welche
+    davon die "richtige" ist, weiß nur die Routing-Tabelle des Systems. Wir
+    fragen sie ab, indem wir einen UDP-Socket auf eine Adresse außerhalb des
+    eigenen Netzes "verbinden" und anschließend nachsehen, welche eigene
+    Adresse das Betriebssystem dafür gewählt hätte.
+    Bei UDP entsteht dabei kein Netzwerkverkehr - es werden keinerlei Pakete
+    verschickt. Die Abfrage funktioniert daher auch ohne Internetzugang.
+
+    Rückgabe: die IP als Text, oder None wenn keine Netzwerkverbindung besteht.
+    """
+    sock = None
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(1)
+        # 192.0.2.0/24 ist laut RFC 5737 fest für Dokumentationszwecke
+        # reserviert und damit garantiert nirgends real erreichbar. Für die
+        # reine Routen-Abfrage genügt das - im Gegensatz zu einer fremden
+        # echten Adresse fragen wir so keinen fremden Server an.
+        sock.connect(("192.0.2.1", 80))
+        ip = sock.getsockname()[0]
+        # Ohne Netzwerkverbindung liefert das System die Loopback-Adresse
+        # zurück, die dem Nutzer hier nicht weiterhilft.
+        return None if ip.startswith("127.") else ip
+    except OSError:
+        return None
+    finally:
+        if sock:
+            sock.close()
+
 if __name__ == '__main__':
     try:
         if GPIO:
@@ -1425,11 +1460,42 @@ if __name__ == '__main__':
         # Hintergrundschleife für API-Pulls als asynchronen Dämonen-Thread starten
         threading.Thread(target=background_loop, daemon=True).start()
             
-        logging.info(f" * Admin-Interface (Localhost): http://127.0.0.1:5000")
-        
-        # Flasks eingebauter Server ist nicht netzwerksicher. Daher wickelt 
+        # An welche Netzwerkkarte binden wir uns? Voreinstellung ist der
+        # Localhost: Dann ist das Interface nur auf dem Pi selbst erreichbar,
+        # und der Zugriff von aussen laeuft zwingend ueber den Reverse Proxy
+        # (Nginx), der die Verbindung verschluesselt. Wer keinen Proxy
+        # einsetzt, kann in der config.json "WEB_HOST": "0.0.0.0" setzen -
+        # siehe die Warnung weiter unten.
+        conf_start = get_cached_config()
+        web_host = str(conf_start.get('WEB_HOST', '127.0.0.1')).strip() or '127.0.0.1'
+        is_loopback = web_host in ('127.0.0.1', 'localhost', '::1')
+        local_ip = get_local_ip()
+
+        logging.info(" * Admin-Interface (auf dem Pi):  http://127.0.0.1:5000")
+
+        if not is_loopback:
+            # Direkt im Netz erreichbar: Hier kennen wir das Protokoll sicher,
+            # denn Waitress selbst spricht ausschliesslich unverschluesseltes HTTP.
+            if local_ip:
+                logging.info(f" * Admin-Interface (im Netzwerk): http://{local_ip}:5000")
+            logging.warning(
+                " * ACHTUNG: WEB_HOST ist offen konfiguriert. Das Interface ist ohne "
+                "Verschluesselung im Netzwerk erreichbar; das Admin-Passwort wird bei "
+                "jedem Aufruf praktisch im Klartext uebertragen."
+            )
+        elif local_ip:
+            # Hinter einem Reverse Proxy: Wir nennen nur die Adresse, nicht das
+            # Protokoll - ob dort HTTP oder HTTPS und welcher Port konfiguriert
+            # ist, weiss dieses Programm nicht.
+            logging.info(f" * Dieser Pi im Netzwerk: {local_ip}")
+            logging.info("   (Zugriff von anderen Rechnern ueber den Reverse Proxy, "
+                         "siehe Installationsanleitung)")
+        else:
+            logging.warning(" * Keine Netzwerkadresse gefunden - besteht eine WLAN-Verbindung?")
+
+        # Flasks eingebauter Server ist nicht netzwerksicher. Daher wickelt
         # 'Waitress' als robuster WSGI-Server die HTTP-Requests ab.
-        serve(app, host='127.0.0.1', port=5000)
+        serve(app, host=web_host, port=5000)
         
     except KeyboardInterrupt:
         # Fängt das STRG+C Signal des Nutzers im Terminal ab

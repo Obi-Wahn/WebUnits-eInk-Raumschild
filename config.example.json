@@ -6,6 +6,7 @@
     "ADMIN_USER": "admin",
     "ADMIN_PASS": "passwort",
     "ROOM_NAME": "Raum101",
+    "WEB_HOST": "127.0.0.1",
     "AUTO_UPDATE_SECONDS": 900,
     "DISPLAY_ACTIVE": true,
     "TOUCH_ACTIVE": true,
