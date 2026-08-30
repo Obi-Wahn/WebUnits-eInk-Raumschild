@@ -41,7 +41,8 @@ Die exakten, getesteten Versionen sind in der Datei [`requirements.txt`](./requi
 * [**python-webuntis**](https://github.com/python-webuntis/python-webuntis): Schnittstelle zur WebUntis-API.
 * [**Pillow (PIL)**](https://python-pillow.github.io/): Generierung des Bildmaterials und des Layouts für das Display.
 * [**Flask**](https://flask.palletsprojects.com/) & [**Waitress**](https://docs.pylonsproject.org/projects/waitress/): Bereitstellung des lokalen Web-Interfaces.
-* [**Waveshare e-Paper**](https://github.com/waveshareteam/e-Paper): Die offiziellen Hardware-Treiber (SPI).
+* [**Waveshare e-Paper**](https://github.com/waveshareteam/e-Paper): Die offiziellen Hardware-Treiber (SPI). Diese werden separat geklont und dabei auf einen geprüften Commit festgelegt.
+* [**gpiozero**](https://gpiozero.readthedocs.io/) & [**lgpio**](https://pypi.org/project/lgpio/): Werden von aktuellen Fassungen des Waveshare-Treibers zur Ansteuerung der GPIO-Pins vorausgesetzt.
 * [**smbus2**](https://pypi.org/project/smbus2/): Direkte I2C-Kommunikation mit dem kapazitiven Touch-Controller.
 
 ## **🚀 Installation & Einrichtung**

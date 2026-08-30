@@ -10,13 +10,28 @@
 # das Programm brechen (Beispiel: Pillow hat die frueher genutzte Methode
 # draw.textsize() in neueren Versionen ersatzlos entfernt).
 #
-# Voraussetzung: Python 3.10 oder neuer (Raspberry Pi OS Bookworm liefert 3.11).
+# Voraussetzung: Python 3.10 oder neuer.
+# (Raspberry Pi OS Bookworm liefert 3.11, Trixie liefert 3.13 - beide passen.)
+#
+# Auf Raspberry Pi OS ist das Rad "piwheels" vorkonfiguriert. Es liefert
+# fertig gebaute ARM-Pakete, sodass hier nichts kompiliert werden muss -
+# ein Compiler oder python3-dev sind also nicht noetig.
 # ------------------------------------------------------------------------------
 
 # --- Hardware-Ansteuerung (nur auf dem Raspberry Pi installierbar) ---
 RPi.GPIO==0.7.1          # GPIO-Pins (Reset-Leitung des Touch-Panels)
 spidev==3.8              # SPI-Bus, wird vom Waveshare-Treiber benoetigt
 smbus2==0.6.1            # I2C-Bus (kapazitiver Touch-Controller)
+
+# --- Abhaengigkeiten des Waveshare-Displaytreibers ---
+# Der Treiber wird separat per git geklont (siehe Installationsanleitung) und
+# bringt seine Python-Abhaengigkeiten nicht selbst mit. Aktuelle Fassungen
+# steuern die GPIO-Pins ueber gpiozero statt ueber RPi.GPIO. Fehlen diese drei
+# Pakete, startet das Programm zwar, laeuft aber still im Simulationsmodus
+# weiter und das Display bleibt leer.
+gpiozero==2.0.1.post3    # GPIO-Abstraktion, die der Displaytreiber nutzt
+colorzero==2.0           # Abhaengigkeit von gpiozero
+lgpio==0.2.2.0           # Backend fuer gpiozero auf aktuellen Kerneln
 
 # --- Daten & Darstellung ---
 webuntis==0.1.25         # Schnittstelle zur WebUntis-API
@@ -29,13 +44,16 @@ Werkzeug==3.1.8          # Passwort-Hashing (generate_password_hash)
 MarkupSafe==3.0.3        # Escaping der API-Texte im Dashboard (XSS-Schutz)
 
 # ------------------------------------------------------------------------------
-# HINWEIS zu RPi.GPIO:
-# Auf dem Raspberry Pi 5 funktioniert RPi.GPIO nicht mehr. Dort stattdessen
-# das API-kompatible Paket 'rpi-lgpio' installieren; der Programmcode bleibt
-# unveraendert. Auf dem hier empfohlenen Pi Zero 2 W ist RPi.GPIO korrekt.
+# HINWEIS zum Raspberry Pi 5:
+# Dort funktioniert das klassische RPi.GPIO nicht mehr. Ersetzen Sie die Zeile
+# "RPi.GPIO==0.7.1" oben durch "rpi-lgpio==0.6" - ein API-kompatibler Ersatz,
+# der Programmcode bleibt unveraendert.
+# WICHTIG: niemals beide gleichzeitig installieren. Beide stellen dasselbe
+# Modul "RPi.GPIO" bereit und ueberschreiben sich gegenseitig; welche Fassung
+# am Ende aktiv ist, entscheidet dann allein die Installationsreihenfolge.
 #
 # HINWEIS zur Entwicklung ohne Hardware:
-# Die drei Hardware-Pakete lassen sich auf einem Windows-/Mac-/x86-Linux-Rechner
+# Die Hardware-Pakete lassen sich auf einem Windows-/Mac-/x86-Linux-Rechner
 # nicht installieren. Das Programm faengt die fehlenden Module ab und laeuft im
 # Simulationsmodus weiter ("Graceful Degradation"), sodass sich das
 # Web-Interface auch ohne Raspberry Pi entwickeln laesst.

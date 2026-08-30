@@ -30,12 +30,20 @@ sudo apt install -y python3-pip python3-venv git libopenjp2-7 libtiff-dev libxcb
 
 ## **3. Projektverzeichnis und Treiber**
 
-Erstellen Sie das Arbeitsverzeichnis und laden Sie die benötigten Hardware-Treiber für das Waveshare-Display herunter:
+Laden Sie zunächst das Projekt selbst herunter. Über `git clone` erhalten Sie alle Programmdateien auf einmal und können spätere Aktualisierungen bequem mit `git pull` einspielen:
 
 cd ~  
-mkdir webuntis-display  
-cd webuntis-display  
-git clone https://github.com/waveshareteam/e-Paper.git
+git clone https://github.com/Obi-Wahn/WebUnits-eInk-Raumschild.git webuntis-display  
+cd webuntis-display
+
+Laden Sie anschließend die Hardware-Treiber für das Waveshare-Display herunter. Diese liegen in einem eigenen Repository des Herstellers und sind bewusst nicht Teil dieses Projekts:
+
+git clone https://github.com/waveshareteam/e-Paper.git  
+cd e-Paper  
+git checkout a794fbc39656b0f93938d1ffb3fdc77eaed9e9fc  
+cd ..
+
+*Warum ein fester Commit?* Der Befehl `git checkout` legt die Treiber auf einen exakt geprüften Stand fest — aus demselben Grund, aus dem auch die Python-Pakete auf feste Versionen gepinnt sind. Der Hersteller ändert dieses Repository laufend; eine neuere Fassung kann andere Abhängigkeiten voraussetzen und das Display ohne erkennbare Fehlermeldung dunkel lassen. Der Download umfasst rund 90 MB und dauert auf einem Pi Zero 2 W einige Minuten.
 
 ## **4. Python-Umgebung einrichten**
 
@@ -46,23 +54,29 @@ source webuntis/bin/activate
 pip install -r requirements.txt  
 deactivate
 
-*Hinweis:* Legen Sie die Datei `requirements.txt` aus diesem Repository zuvor im Projektverzeichnis ab. Auf einem Raspberry Pi 5 ersetzen Sie darin `RPi.GPIO` durch das API-kompatible Paket `rpi-lgpio`; der Programmcode bleibt unverändert.
+Die Datei `requirements.txt` liegt bereits im Projektverzeichnis, da sie mit dem `git clone` aus Schritt 3 heruntergeladen wurde. Auf Raspberry Pi OS muss dabei nichts kompiliert werden: Die vorkonfigurierte Paketquelle „piwheels" liefert fertig gebaute ARM-Pakete.
 
-## **5. Programmdateien und Konfiguration**
+*Hinweis:* Auf einem Raspberry Pi 5 ersetzen Sie in der `requirements.txt` das Paket `RPi.GPIO` durch das API-kompatible `rpi-lgpio`; der Programmcode bleibt unverändert. Installieren Sie niemals beide gleichzeitig — sie stellen dasselbe Modul bereit und überschreiben sich gegenseitig.
 
-Erstellen Sie im Verzeichnis /home/pi/webuntis-display die folgenden Dateien:
+## **5. Konfiguration**
 
-1. **raumanzeige.py**: Fügen Sie den vollständigen Python-Code des Hauptprogramms ein.  
-2. **config.json**: Erstellen Sie die Konfigurationsdatei. Nutzen Sie folgendes Schema und passen Sie die Parameter an Ihre Gegebenheiten an:
+Das Hauptprogramm `raumanzeige.py` wurde bereits mit dem `git clone` aus Schritt 3 heruntergeladen. Zu erstellen bleibt nur die Konfigurationsdatei — sie enthält Ihre Zugangsdaten und ist deshalb bewusst nicht Teil des Repositories.
+
+Legen Sie sie auf Basis der mitgelieferten Vorlage an und passen Sie die Parameter an Ihre Gegebenheiten an:
+
+cp config.example.json config.json  
+nano config.json
+
+Die Vorlage enthält folgende Parameter (hier zur besseren Übersicht auf zwei Stunden und eine Pause gekürzt — die vollständige Datei bringt einen kompletten Schultag mit):
 
 {  
     "UNTIS_SERVER": "demo.webuntis.com",  
-    "UNTIS_SCHOOL": "muster_schule",  
-    "UNTIS_USER": "benutzername",  
-    "UNTIS_PASS": "passwort",  
+    "UNTIS_SCHOOL": "demo_schule",  
+    "UNTIS_USER": "webuntis_benutzername",  
+    "UNTIS_PASS": "webuntis_passwort",  
     "ADMIN_USER": "admin",  
-    "ADMIN_PASS": "tuerschild",  
-    "ROOM_NAME": "Raum 101",  
+    "ADMIN_PASS": "passwort",  
+    "ROOM_NAME": "Raum101",  
     "AUTO_UPDATE_SECONDS": 900,  
     "DISPLAY_ACTIVE": true,  
     "TOUCH_ACTIVE": true,  
@@ -89,7 +103,7 @@ Führen Sie folgenden Befehl aus, damit nur der Besitzer der Datei Lese- und Sch
 
 chmod 600 /home/pi/webuntis-display/config.json
 
-*Versionskontrolle:* Sollten Sie den Code über ein öffentliches Repository (z. B. GitHub) verwalten, stellen Sie zwingend sicher, dass die Datei config.json in der .gitignore-Datei aufgeführt ist, um einen versehentlichen Upload von Zugangsdaten und schulbezogenen Informationen zu verhindern.
+*Versionskontrolle:* Die mitgelieferte `.gitignore` schließt `config.json` bereits vom Upload aus. Sollten Sie den Code in einem eigenen öffentlichen Repository verwalten, prüfen Sie diesen Ausschluss vor der ersten Veröffentlichung — er verhindert, dass Zugangsdaten und schulbezogene Informationen versehentlich hochgeladen werden.
 
 ## **7. Nginx Reverse Proxy und HTTPS**
 
