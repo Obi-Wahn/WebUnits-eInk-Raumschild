@@ -638,15 +638,22 @@ def build_detail_line(draw: ImageDraw.ImageDraw, lesson: Lesson, font, max_width
     In2" wäre das die Raumangabe, also die Information, für die jemand überhaupt
     vor der Tür steht.
 
-    Deshalb geben wir gestaffelt nach: Zuerst entfällt die Lehrkraft, dann die
-    Klasse, und erst wenn auch das nicht reicht, wird der Info-Text an einer
-    Wortgrenze gekürzt.
+    Deshalb geben wir gestaffelt nach. Die zweite Stufe nutzt aus, dass in
+    WebUntis ohnehin nur das Kürzel der Lehrkraft hinterlegt ist ("Gk", "Ef"):
+    Statt das Feld ganz zu streichen, entfällt erst nur die Beschriftung
+    "Lehrkraft: ", die allein schon 57 Pixel kostet. Innerhalb der
+    Schulgemeinschaft sind die Kürzel geläufig, das Kürzel für sich genommen
+    ist also weiterhin verständlich.
     """
     klasse = f"Kl: {lesson.klasse}" if lesson.klasse else ""
     lehrkraft = f"Lehrkraft: {lesson.lehrer}" if lesson.lehrer else ""
+    kuerzel = lesson.lehrer or ""
     info = lesson.stunden_info or ""
 
-    for teile in ([klasse, lehrkraft, info], [klasse, info], [info]):
+    for teile in ([klasse, lehrkraft, info],   # alles ausgeschrieben
+                  [klasse, kuerzel, info],     # nur noch das Kuerzel der Lehrkraft
+                  [klasse, info],              # Lehrkraft entfaellt ganz
+                  [info]):                     # auch die Klasse entfaellt
         zeile = " | ".join(t for t in teile if t)
         if zeile and get_text_width(draw, zeile, font) <= max_width:
             return zeile
