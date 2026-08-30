@@ -127,6 +127,7 @@ UI_LINE_Y = 68
 UI_MARGIN = 5
 UI_BADGE_PADDING = 3            # Luft links und rechts im Status-Kasten
 UI_BADGE_GAP = 5                # Abstand zwischen Status-Kasten und Fachname
+UI_ELLIPSIS = "…"               # Zeichen für gekürzte Texte (U+2026)
 
 # Beschriftung der invertierten Status-Kästen. Die Kastenbreite wird zur
 # Laufzeit aus der Textbreite berechnet, diese Texte sind also frei änderbar.
@@ -595,6 +596,64 @@ def get_text_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTyp
         try: return draw.textbbox((0,0), text, font=font)[2] 
         except AttributeError: return draw.textsize(text, font=font)[0] 
 
+def truncate_to_width(draw: ImageDraw.ImageDraw, text: str, font, max_width: int) -> str:
+    """
+    Kürzt einen Text auf die verfügbare Pixelbreite und hängt "…" an.
+
+    Getrennt wird bevorzugt an einer Wortgrenze: "Raumaenderung nach…" ist
+    lesbarer als "Raumaenderung nac…". Passt nicht einmal das erste Wort,
+    wird zeichenweise gekürzt, damit auch ein einzelnes sehr langes Wort
+    (etwa eine Fach-Bezeichnung ohne Leerzeichen) nicht aus dem Display läuft.
+    """
+    if not text:
+        return ""
+    if get_text_width(draw, text, font) <= max_width:
+        return text
+
+    # Wortweise aufbauen, solange der Text samt Auslassungszeichen noch passt
+    zeile = ""
+    for wort in text.split():
+        probe = f"{zeile} {wort}".strip()
+        if get_text_width(draw, probe + UI_ELLIPSIS, font) > max_width:
+            break
+        zeile = probe
+    if zeile:
+        return zeile + UI_ELLIPSIS
+
+    # Nicht einmal das erste Wort passt: zeichenweise kürzen
+    for i in range(len(text), 0, -1):
+        if get_text_width(draw, text[:i] + UI_ELLIPSIS, font) <= max_width:
+            return text[:i] + UI_ELLIPSIS
+    return ""
+
+def build_detail_line(draw: ImageDraw.ImageDraw, lesson: Lesson, font, max_width: int) -> str:
+    """
+    Setzt die Detailzeile (Klasse, Lehrkraft, Zusatzinfo) so zusammen, dass sie
+    in die verfügbare Breite passt.
+
+    PÄDAGOGISCHER HINTERGRUND (Priorisierung statt stumpfem Abschneiden):
+    Die volle Zeile ist bei fast jeder Stunde mit Zusatzinfo zu lang - typisch
+    sind 320 Pixel bei 240 verfügbaren. Würde man sie einfach hinten abschneiden,
+    verlöre man genau das Ende des Info-Textes. Bei "Achtung: Raumaenderung nach
+    In2" wäre das die Raumangabe, also die Information, für die jemand überhaupt
+    vor der Tür steht.
+
+    Deshalb geben wir gestaffelt nach: Zuerst entfällt die Lehrkraft, dann die
+    Klasse, und erst wenn auch das nicht reicht, wird der Info-Text an einer
+    Wortgrenze gekürzt.
+    """
+    klasse = f"Kl: {lesson.klasse}" if lesson.klasse else ""
+    lehrkraft = f"Lehrkraft: {lesson.lehrer}" if lesson.lehrer else ""
+    info = lesson.stunden_info or ""
+
+    for teile in ([klasse, lehrkraft, info], [klasse, info], [info]):
+        zeile = " | ".join(t for t in teile if t)
+        if zeile and get_text_width(draw, zeile, font) <= max_width:
+            return zeile
+
+    # Auch für sich allein ist das wichtigste Stück noch zu breit
+    return truncate_to_width(draw, info or klasse or lehrkraft, font, max_width)
+
 def draw_lesson_block(draw: ImageDraw.ImageDraw, lesson: Lesson, y_offset: int, label_text: str, f_small, f_reg, f_med) -> None:
     """
     Zeichnet einen strukturierten Unterrichtsblock (JETZT oder DANACH) als Grafik.
@@ -635,16 +694,14 @@ def draw_lesson_block(draw: ImageDraw.ImageDraw, lesson: Lesson, y_offset: int, 
         # Regulärer Unterricht: Das Fach beginnt direkt am linken Rand.
         fach_x = UI_MARGIN
 
+    # Der Platz für den Fachnamen ist der Rest bis zum rechten Rand - neben
+    # einem Status-Kasten also entsprechend weniger.
+    fach_anzeige = truncate_to_width(draw, fach_anzeige, f_reg, UI_WIDTH - UI_MARGIN - fach_x)
     draw.text((fach_x, y_content), fach_anzeige, font=f_reg, fill=0)
-        
-    # ZEILE 2: Zusatzinfos (Klasse, Lehrer, Info-Text)
+
+    # ZEILE 2: Zusatzinfos (Klasse, Lehrkraft, Info-Text)
     y_details = y_content + 13
-    details = []
-    if lesson.klasse: details.append(f"Kl: {lesson.klasse}")
-    if lesson.lehrer: details.append(f"Lehrkraft: {lesson.lehrer}")
-    if lesson.stunden_info: details.append(lesson.stunden_info)
-    
-    detail_str = " | ".join(details)
+    detail_str = build_detail_line(draw, lesson, f_small, UI_WIDTH - 2 * UI_MARGIN)
     draw.text((UI_MARGIN, y_details), detail_str, font=f_small, fill=0)
 
 def update_display_logic(data: Optional[Dict[str, Optional[Lesson]]], message: str, conf: Dict[str, Any], stale: bool = False) -> None:
