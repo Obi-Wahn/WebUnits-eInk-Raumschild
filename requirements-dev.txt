@@ -1,0 +1,32 @@
+# ==============================================================================
+# Zusaetzliche Pakete zum Ausfuehren der Testsuite
+# ==============================================================================
+# Installation (innerhalb der virtuellen Umgebung):
+#     pip install -r requirements-dev.txt
+#     pytest -q
+#
+# Fuer den reinen Betrieb des Tuerschilds wird diese Datei NICHT benoetigt -
+# dafuer genuegt requirements.txt. Wer nur das Schild betreibt, kann sie
+# ignorieren.
+# ------------------------------------------------------------------------------
+
+pytest==9.1.1            # Testrahmen
+
+# --- Laufzeit-Pakete ohne Hardware-Bezug ---
+# Diese Zeilen sind eine bewusste Wiederholung aus requirements.txt.
+# Grund: Auf einem gewoehnlichen PC (und damit auch auf den Rechnern, auf denen
+# die Tests bei GitHub laufen) lassen sich RPi.GPIO, spidev und lgpio nicht
+# installieren. Sie werden fuer die Tests aber auch nicht gebraucht, weil das
+# Programm fehlende Hardware abfaengt und im Simulationsmodus weiterlaeuft.
+# Auf dem Raspberry Pi sind diese Pakete bereits vorhanden; ein erneutes
+# Installieren aendert dort nichts, da die Versionen uebereinstimmen.
+#
+# WICHTIG: Wird eine dieser Versionen in requirements.txt geaendert, muss sie
+# hier mitgezogen werden - sonst testen wir gegen andere Fassungen, als auf
+# dem Geraet tatsaechlich laufen.
+webuntis==0.1.25
+Pillow==12.3.0
+Flask==3.1.3
+waitress==3.0.2
+Werkzeug==3.1.8
+MarkupSafe==3.0.3

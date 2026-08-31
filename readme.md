@@ -96,6 +96,27 @@ Das Programm erfordert eine Konfigurationsdatei namens `config.json` im Hauptver
 3. **Standard-Passwörter ändern:** Ändern Sie zwingend die voreingestellten Werte für ADMIN\_USER und ADMIN\_PASS in der config.json vor der ersten produktiven Inbetriebnahme im Netzwerk.  
 4. **Versionskontrolle (.gitignore):** Sollten Sie eigene Anpassungen an diesem Code-Repository vornehmen und dieses veröffentlichen wollen, stellen Sie sicher, dass die Datei config.json sowie etwaige Log-Dateien durch die .gitignore vom Upload ausgeschlossen sind. Reale Schul-, Nutzer- oder Zugangsdaten dürfen nicht in öffentliche Repositories gelangen.
 
+## **🧪 Tests**
+
+Das Projekt bringt eine automatisierte Testsuite mit. Sie prüft die Logik des Programms — Stundenauswahl, Offline-Rücklage, Textlayout, Konfigurationsgrenzen sowie Anmeldung und CSRF-Schutz des Web-Interfaces.
+
+**Ausführen auf dem Raspberry Pi:**
+
+```bash
+cd ~/webuntis-display
+source webuntis/bin/activate
+pip install -r requirements-dev.txt   # einmalig
+pytest -q
+```
+
+Der sinnvolle Zeitpunkt dafür ist **nach einem `git pull` und vor dem Neustart des Dienstes**. Der Durchlauf dauert wenige Sekunden.
+
+**Automatisch bei GitHub:** Bei jedem Push und jedem Pull Request läuft die Suite unter Python 3.11 und 3.13 (siehe `.github/workflows/tests.yml`). Das Ergebnis erscheint direkt im Pull Request.
+
+*Sicherheitshinweis:* Die Tests ersetzen den Displaytreiber grundsätzlich durch eine Attrappe. Gezeichnet wird mit echtem Pillow in einen Speicherpuffer — Layoutfehler fallen also auf, das E-Paper wird aber nie angesteuert. Ein Testlauf während des laufenden Betriebs stört die Anzeige nicht.
+
+*Was die Tests nicht abdecken:* Die Hardware selbst — SPI-Übertragung, I2C-Touch und das tatsächliche Erscheinungsbild auf dem Panel. Dafür bleiben der Testlauf-Knopf im Web-Interface und der Blick auf das Schild.
+
 ## **📝 Lizenz & Nutzung**
 
 Dieses Projekt ist Open Source und steht unter der [MIT-Lizenz](./LICENSE). Dieses Projekt kann für den schulischen und edukativen Bereich frei genutzt, modifiziert und weiterentwickelt werden. Ideal geeignet als Praxisprojekt für den Informatikunterricht\! 
