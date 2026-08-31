@@ -34,7 +34,7 @@ import subprocess
 import logging
 import secrets               # Für kryptografisch sichere Zufallszahlen (CSRF-Tokens)
 from dataclasses import dataclass # Für strukturierte Daten statt loser Dictionaries
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 import webuntis
 from functools import wraps
 from flask import Flask, render_template_string, request, redirect, Response, abort
@@ -99,6 +99,7 @@ CONFIG_FILE = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'config.
 TOUCH_RST_PIN = 22
 TOUCH_I2C_ADDR = 0x14           # Hexadezimale I2C-Adresse des Touch-Chips
 TOUCH_COOLDOWN = 5.0            # Entprell-Zeit in Sekunden (verhindert Touch-Spam)
+BACKGROUND_ERROR_PAUSE = 30     # Wartezeit nach einem unerwarteten Schleifenfehler
 HOLIDAYS_CACHE_SECONDS = 86400  # API-Schonung: Ferien für 24 Stunden im RAM cachen
 
 # Grenzen für das automatische Abrufintervall.
@@ -152,6 +153,23 @@ class Lesson:
     status_code: Optional[str]
     stunden_info: str
 
+@dataclass
+class TimedLesson:
+    """
+    Eine bereits vollständig ausgelesene Stunde samt ihrer Zeiten.
+
+    TECHNISCHER HINTERGRUND (Warum eine eigene Struktur?):
+    Die Objekte, die die WebUntis-Bibliothek liefert, lesen Fach, Lehrkraft und
+    Klasse erst beim Zugriff nach - und fragen dafür ihre Sitzung. Ist die
+    Sitzung beendet und das Netz weg, kann dieser Zugriff fehlschlagen oder
+    hängen. Für die Offline-Rücklage speichern wir deshalb nicht die
+    Original-Objekte, sondern diese eigene Struktur: Sie enthält nur noch
+    einfache Werte und ist vollständig unabhängig von Netz und Sitzung.
+    """
+    start: datetime.datetime
+    end: datetime.datetime
+    lesson: Lesson
+
 class AppState:
     """
     Zentrale Zustandsverwaltung (State Management).
@@ -183,11 +201,14 @@ class AppState:
         self.last_holidays_fetch: float = 0
         self.global_fonts: Dict[str, ImageFont.FreeTypeFont] = {}
 
-        # Offline-Rücklage: der zuletzt erfolgreich abgerufene Tagesplan.
+        # Offline-Rücklage: der zuletzt erfolgreich abgerufene Tagesplan,
+        # bereits vollständig ausgelesen (siehe TimedLesson).
         # Fällt WLAN oder WebUntis aus, zeigen wir weiter diesen Plan an,
         # statt eine Fehlermeldung über gültige Unterrichtsdaten zu legen.
-        self.cached_timetable = None
-        self.cached_timetable_date: Optional[datetime.date] = None
+        # Achtung: None bedeutet "keine Rücklage vorhanden", eine leere Liste
+        # dagegen "heute findet nachweislich kein Unterricht statt".
+        self.cached_lessons: Optional[List[TimedLesson]] = None
+        self.cached_lessons_date: Optional[datetime.date] = None
         self.last_successful_sync: Optional[datetime.datetime] = None
         self.data_is_stale: bool = False
         
@@ -391,41 +412,70 @@ def parse_lesson(lesson, conf: Dict[str, Any]) -> Optional[Lesson]:
         stunden_info=" | ".join(info_parts)
     )
 
-def select_lessons(timetable, conf: Dict[str, Any], now: datetime.datetime) -> Tuple[Dict[str, Optional[Lesson]], str]:
+def resolve_timetable(timetable, conf: Dict[str, Any]) -> List[TimedLesson]:
     """
-    Wählt aus einem bereits geladenen Tagesplan die Stunde aus, die JETZT läuft,
-    und die, die DANACH folgt. Erzeugt für unterrichtsfreie Zeiträume die
-    passende Ersatzmeldung (Pause, Freistunde, Unterrichtsende).
+    Wandelt die rohen WebUntis-Objekte eines Tages einmalig in eigene
+    Datensätze um und sortiert sie chronologisch.
+
+    Das muss geschehen, SOLANGE DIE SITZUNG NOCH BESTEHT. Die Bibliothek liest
+    Fach, Lehrkraft und Klasse erst beim Zugriff nach und stellt dafür nötigen-
+    falls eine Netzwerkanfrage - auch dann, wenn man sie ausdrücklich um den
+    Zwischenspeicher bittet. Nach dem Abmelden oder ohne Verbindung würde ein
+    solcher Zugriff fehlschlagen oder unbegrenzt warten.
+
+    Anders als früher lesen wir hier ALLE Stunden des Tages aus, nicht nur die
+    beiden gerade benötigten. Nur so ist die Offline-Rücklage später vollständig
+    verwendbar.
+    """
+    aufgeloest: List[TimedLesson] = []
+    for rohdaten in timetable:
+        start = getattr(rohdaten, 'start', None)
+        ende = getattr(rohdaten, 'end', None)
+        # Beschädigte Einträge ohne Zeitangabe überspringen
+        if start is None or ende is None:
+            continue
+        try:
+            stunde = parse_lesson(rohdaten, conf)
+        except Exception as e:
+            # Eine einzelne unlesbare Stunde darf nicht den ganzen Tag verwerfen
+            logging.warning(f"Stunde konnte nicht ausgelesen werden, wird übersprungen: {e}")
+            continue
+        if stunde is not None:
+            aufgeloest.append(TimedLesson(start=start, end=ende, lesson=stunde))
+
+    aufgeloest.sort(key=lambda eintrag: eintrag.start)
+    return aufgeloest
+
+def select_lessons(lessons: List[TimedLesson], conf: Dict[str, Any], now: datetime.datetime) -> Tuple[Dict[str, Optional[Lesson]], str]:
+    """
+    Wählt aus einem bereits ausgelesenen Tagesplan die Stunde aus, die JETZT
+    läuft, und die, die DANACH folgt. Erzeugt für unterrichtsfreie Zeiträume
+    die passende Ersatzmeldung (Pause, Freistunde, Unterrichtsende).
 
     TECHNISCHER HINTERGRUND (Trennung von Laden und Auswerten):
-    Diese Funktion arbeitet rein lokal und braucht kein Netzwerk. Genau deshalb
-    ist sie von get_current_lesson() getrennt: Bei einem WLAN- oder WebUntis-
-    Ausfall können wir sie erneut auf den zuletzt gespeicherten Tagesplan
-    anwenden. Das Display wechselt dann auch offline zur richtigen Zeit auf die
-    nächste Stunde, statt bei den Daten des Ausfallzeitpunkts stehenzubleiben.
+    Diese Funktion arbeitet auf fertigen Daten und rührt weder Netzwerk noch
+    WebUntis-Sitzung an. Genau deshalb ist sie von get_current_lesson()
+    getrennt: Bei einem WLAN- oder WebUntis-Ausfall können wir sie erneut auf
+    den zuletzt gespeicherten Tagesplan anwenden. Das Display wechselt dann auch
+    offline zur richtigen Zeit auf die nächste Stunde, statt bei den Daten des
+    Ausfallzeitpunkts stehenzubleiben.
     """
-    if not timetable:
+    if not lessons:
         return {"current": None, "next": None}, "Unterrichtsfrei"
 
     now_time = now.time()
 
-    # Wir sortieren chronologisch. Fallback auf datetime.max verhindert Abstürze
-    # bei beschädigten WebUntis-Einträgen, die kein Start-Datum haben.
-    timetable = sorted(timetable, key=lambda l: getattr(l, 'start', datetime.datetime.max))
     current_lesson = None
     next_lesson = None
 
-    for lesson in timetable:
-        if getattr(lesson, 'start', None) is None or getattr(lesson, 'end', None) is None:
-            continue
-
+    for eintrag in lessons:
         # 5-Minuten-Vorlauf: Das Display schaltet bereits 5 Min vor dem Klingeln auf die neue Stunde um
-        lesson_start_buffered = lesson.start - datetime.timedelta(minutes=5)
+        lesson_start_buffered = eintrag.start - datetime.timedelta(minutes=5)
 
-        if lesson_start_buffered <= now <= lesson.end:
-            current_lesson = lesson
-        elif lesson.start > now and next_lesson is None:
-            next_lesson = lesson
+        if lesson_start_buffered <= now <= eintrag.end:
+            current_lesson = eintrag.lesson
+        elif eintrag.start > now and next_lesson is None:
+            next_lesson = eintrag.lesson
 
     message = ""
     # Freistunden / Pausen generieren
@@ -452,10 +502,8 @@ def select_lessons(timetable, conf: Dict[str, Any], now: datetime.datetime) -> T
             logging.warning(f"Zeit-Parsing Fehler: {e}")
             message = "Raum ist frei"
 
-    return {
-        "current": parse_lesson(current_lesson, conf),
-        "next": parse_lesson(next_lesson, conf)
-    }, message
+    # Die Stunden sind bereits ausgelesen - hier wird nur noch ausgewählt.
+    return {"current": current_lesson, "next": next_lesson}, message
 
 def get_offline_fallback(conf: Dict[str, Any]) -> Optional[Tuple[Dict[str, Optional[Lesson]], str]]:
     """
@@ -473,15 +521,18 @@ def get_offline_fallback(conf: Dict[str, Any]) -> Optional[Tuple[Dict[str, Optio
     """
     now = get_now()
     with app_state.state_lock:
-        cached_timetable = app_state.cached_timetable
-        cached_date = app_state.cached_timetable_date
+        cached_lessons = app_state.cached_lessons
+        cached_date = app_state.cached_lessons_date
 
-    if cached_timetable is None or cached_date != now.date():
+    # Ausdrücklich auf None prüfen: Eine leere Liste ist eine gültige Rücklage
+    # und bedeutet "heute findet nachweislich kein Unterricht statt".
+    if cached_lessons is None or cached_date != now.date():
         return None
 
     # Neu auswerten statt die alte Anzeige zu konservieren: So stimmt auch
-    # während des Ausfalls noch, welche Stunde gerade läuft.
-    return select_lessons(cached_timetable, conf, now)
+    # während des Ausfalls noch, welche Stunde gerade läuft. Die Daten sind
+    # bereits vollständig ausgelesen, es wird also nichts nachgeladen.
+    return select_lessons(cached_lessons, conf, now)
 
 def get_current_lesson(conf: Dict[str, Any]) -> Tuple[Optional[Dict[str, Optional[Lesson]]], str]:
     """
@@ -558,14 +609,18 @@ def get_current_lesson(conf: Dict[str, Any]) -> Tuple[Optional[Dict[str, Optiona
             logging.error(f"Unerwarteter WebUntis Stundenplan-Fehler: {e}")
             raise e
             
+        # Den Tagesplan JETZT vollständig auslesen - hier besteht die Sitzung
+        # noch. Danach sind die Daten von Netz und Sitzung unabhängig.
+        lessons = resolve_timetable(timetable, conf)
+
         # Abruf erfolgreich: Tagesplan als Offline-Rücklage sichern, damit ein
         # späterer Netzausfall die Anzeige nicht wertlos macht.
         with app_state.state_lock:
-            app_state.cached_timetable = timetable
-            app_state.cached_timetable_date = today
+            app_state.cached_lessons = lessons
+            app_state.cached_lessons_date = today
             app_state.last_successful_sync = now
 
-        return select_lessons(timetable, conf, now)
+        return select_lessons(lessons, conf, now)
 
     except Exception as e:
         # PÄDAGOGISCHER HINTERGRUND: Spezifisches Error-Handling
@@ -579,10 +634,16 @@ def get_current_lesson(conf: Dict[str, Any]) -> Tuple[Optional[Dict[str, Optiona
         else:
             return None, ERR_UNTIS_OFFLINE
     finally:
-        socket.setdefaulttimeout(old_timeout)
+        # WICHTIG: Erst abmelden, dann das Zeitlimit zurücksetzen.
+        # Umgekehrt liefe die Abmeldung ohne jede Begrenzung. Reisst die
+        # Verbindung genau in diesem Moment ab, wartet logout() dann endlos
+        # auf eine Antwort - und mit ihm die gesamte Hintergrundschleife.
+        # Das Display friere ein, waehrend das Web-Interface weiterlaeuft und
+        # das System dadurch gesund aussieht.
         if session:
             try: session.logout()
             except Exception: pass
+        socket.setdefaulttimeout(old_timeout)
 
 
 # ==============================================================================
@@ -863,139 +924,152 @@ def background_loop() -> None:
     last_static_date = None
 
     while not app_state.shutdown_event.is_set():
-        with app_state.state_lock:
-            is_testing = app_state.test_mode_active
-            
-        if is_testing:
-            app_state.shutdown_event.wait(1)
-            continue
-
-        conf = get_cached_config()
-        if not conf:
-            app_state.shutdown_event.wait(5)
-            continue
-
-        schedule = conf.get("SCHEDULE", {})
-        lessons_conf = schedule.get("LESSONS", [])
-        
-        # PÄDAGOGISCH: Wir nutzen 'Sets' anstelle von Listen für die Suchzeiten. 
-        # Sets garantieren extrem schnelle Zugriffszeiten (O(1)), was den Pi entlastet.
-        dyn_update_times = set() 
-        
-        if isinstance(lessons_conf, list):
-            for l in lessons_conf:
-                start_t = l.get("start")
-                end_t = l.get("end")
-                if start_t: 
-                    dyn_update_times.add(start_t)
-                    try:
-                        # Berechne den 5-Minuten-Vorlauf
-                        h, m = map(int, str(start_t).split(":"))
-                        dt = datetime.datetime(2000, 1, 1, h, m) - datetime.timedelta(minutes=5)
-                        dyn_update_times.add(dt.strftime("%H:%M"))
-                    except Exception: 
-                        pass 
-                if end_t: 
-                    dyn_update_times.add(end_t)
-        
-        for b in schedule.get("BREAKS", []):
-            if b.get("start"): dyn_update_times.add(b.get("start"))
-            if b.get("end"): dyn_update_times.add(b.get("end"))
-            
-        dyn_update_times.add(schedule.get("DAY_START", "07:55"))
-        dyn_update_times.add(schedule.get("DAY_END", "15:30"))
-        
-        now_time_system = time.time() 
-        current_dt = get_now()
-        current_hm = current_dt.strftime("%H:%M")
-        current_time_obj = current_dt.time()
-        
-        # Laufzeit-Prüfung: Außerhalb der Schulzeiten updaten wir seltener
         try:
-            ds_h, ds_m = map(int, schedule.get("DAY_START", "07:55").split(":"))
-            de_h, de_m = map(int, schedule.get("DAY_END", "15:30").split(":"))
-            active_start = datetime.time(max(0, ds_h - 1), ds_m)
-            active_end = datetime.time(min(23, de_h + 1), de_m)
-            is_active_hours = active_start <= current_time_obj <= active_end
-        except Exception:
-            is_active_hours = True 
-
-        # Touch-Erkennung
-        if conf.get('TOUCH_ACTIVE', True) and check_touch_via_i2c():
-            if now_time_system - last_touch_time > TOUCH_COOLDOWN:
-                logging.info(f"Display beruehrt! Update wird vorbereitet...")
-                with app_state.state_lock:
-                    app_state.force_update_flag = True
-            last_touch_time = now_time_system
-
-        with app_state.state_lock:
-            current_force_update = app_state.force_update_flag
-            current_show_demo = app_state.show_demo_once
-
-        # Logik: Update erforderlich?
-        is_exact_time = (current_hm in dyn_update_times) and (last_minute_triggered != current_hm)
-        is_interval_reached = (now_time_system - last_update >= get_update_interval(conf)) and is_active_hours
-
-        # Update ausführen
-        if current_force_update or is_interval_reached or is_exact_time:
-            if is_exact_time: last_minute_triggered = current_hm 
-            is_manual = current_force_update 
-            
             with app_state.state_lock:
-                app_state.force_update_flag = False
+                is_testing = app_state.test_mode_active
             
-            if conf.get('DISPLAY_ACTIVE', True):
-                is_stale = False
+            if is_testing:
+                app_state.shutdown_event.wait(1)
+                continue
 
-                if current_show_demo:
-                    data = {
-                        "current": Lesson("Informatik", "Informatik", "Ab", "11B", "09:55 - 10:40", "3. Std.", "irregular", "Theorieunterricht - Netzwerktechnik"),
-                        "next": Lesson("Geschichte", "Geschichte", "Cd", "9B", "10:45 - 11:30", "4. Std.", None, "")
-                    }
-                    err = ""
+            conf = get_cached_config()
+            if not conf:
+                app_state.shutdown_event.wait(5)
+                continue
+
+            schedule = conf.get("SCHEDULE", {})
+            lessons_conf = schedule.get("LESSONS", [])
+        
+            # PÄDAGOGISCH: Wir nutzen 'Sets' anstelle von Listen für die Suchzeiten. 
+            # Sets garantieren extrem schnelle Zugriffszeiten (O(1)), was den Pi entlastet.
+            dyn_update_times = set() 
+        
+            if isinstance(lessons_conf, list):
+                for l in lessons_conf:
+                    start_t = l.get("start")
+                    end_t = l.get("end")
+                    if start_t: 
+                        dyn_update_times.add(start_t)
+                        try:
+                            # Berechne den 5-Minuten-Vorlauf
+                            h, m = map(int, str(start_t).split(":"))
+                            dt = datetime.datetime(2000, 1, 1, h, m) - datetime.timedelta(minutes=5)
+                            dyn_update_times.add(dt.strftime("%H:%M"))
+                        except Exception: 
+                            pass 
+                    if end_t: 
+                        dyn_update_times.add(end_t)
+        
+            for b in schedule.get("BREAKS", []):
+                if b.get("start"): dyn_update_times.add(b.get("start"))
+                if b.get("end"): dyn_update_times.add(b.get("end"))
+            
+            dyn_update_times.add(schedule.get("DAY_START", "07:55"))
+            dyn_update_times.add(schedule.get("DAY_END", "15:30"))
+        
+            now_time_system = time.time() 
+            current_dt = get_now()
+            current_hm = current_dt.strftime("%H:%M")
+            current_time_obj = current_dt.time()
+        
+            # Laufzeit-Prüfung: Außerhalb der Schulzeiten updaten wir seltener
+            try:
+                ds_h, ds_m = map(int, schedule.get("DAY_START", "07:55").split(":"))
+                de_h, de_m = map(int, schedule.get("DAY_END", "15:30").split(":"))
+                active_start = datetime.time(max(0, ds_h - 1), ds_m)
+                active_end = datetime.time(min(23, de_h + 1), de_m)
+                is_active_hours = active_start <= current_time_obj <= active_end
+            except Exception:
+                is_active_hours = True 
+
+            # Touch-Erkennung
+            if conf.get('TOUCH_ACTIVE', True) and check_touch_via_i2c():
+                if now_time_system - last_touch_time > TOUCH_COOLDOWN:
+                    logging.info(f"Display beruehrt! Update wird vorbereitet...")
                     with app_state.state_lock:
-                        app_state.show_demo_once = False
-                else:
-                    data, err = get_current_lesson(conf)
+                        app_state.force_update_flag = True
+                last_touch_time = now_time_system
 
-                    # Ausfallsicherheit: Bei einer vorübergehenden Störung lieber den
-                    # zuletzt abgerufenen Tagesplan weiterzeigen als eine Fehlermeldung.
-                    if data is None and err in TRANSIENT_ERRORS:
-                        fallback = get_offline_fallback(conf)
-                        if fallback is not None:
-                            logging.warning(f"WebUntis nicht erreichbar ({err}) - "
-                                            "zeige zuletzt abgerufene Plandaten.")
-                            data, err = fallback
-                            is_stale = True
+            with app_state.state_lock:
+                current_force_update = app_state.force_update_flag
+                current_show_demo = app_state.show_demo_once
 
-                # Cachen der Ergebnisse für das Webinterface
-                with app_state.state_lock:
-                    app_state.current_display_data = data
-                    app_state.current_display_msg = err
-                    app_state.data_is_stale = is_stale
+            # Logik: Update erforderlich?
+            is_exact_time = (current_hm in dyn_update_times) and (last_minute_triggered != current_hm)
+            is_interval_reached = (now_time_system - last_update >= get_update_interval(conf)) and is_active_hours
 
-                current_date = current_dt.strftime("%Y-%m-%d")
-                is_static_day = err in ["Schönes Wochenende!", "Unterrichtsfrei"] or (isinstance(err, str) and "Ferien" in err)
-                
-                # E-Paper Schonung: Statische Meldungen (z.B. Ferien) zeichnen wir nur einmal pro Tag neu
-                skip_update = False
-                if is_static_day and not is_manual:
-                    if last_static_date == current_date: skip_update = True
-                    else: last_static_date = current_date 
-                else: last_static_date = None 
-                    
-                if not skip_update:
-                    update_display_logic(data, err, conf, stale=is_stale)
-            else:
-                clear_display_once()
-                
-            last_update = time.time()
-            app_state.shutdown_event.wait(1.5)
-            clear_touch_interrupt_via_i2c()
-            last_touch_time = time.time()
+            # Update ausführen
+            if current_force_update or is_interval_reached or is_exact_time:
+                if is_exact_time: last_minute_triggered = current_hm 
+                is_manual = current_force_update 
             
-        # Kurze Pause verhindert CPU-Spam (100% Auslastung)
-        app_state.shutdown_event.wait(0.5)
+                with app_state.state_lock:
+                    app_state.force_update_flag = False
+            
+                if conf.get('DISPLAY_ACTIVE', True):
+                    is_stale = False
+
+                    if current_show_demo:
+                        data = {
+                            "current": Lesson("Informatik", "Informatik", "Ab", "11B", "09:55 - 10:40", "3. Std.", "irregular", "Theorieunterricht - Netzwerktechnik"),
+                            "next": Lesson("Geschichte", "Geschichte", "Cd", "9B", "10:45 - 11:30", "4. Std.", None, "")
+                        }
+                        err = ""
+                        with app_state.state_lock:
+                            app_state.show_demo_once = False
+                    else:
+                        data, err = get_current_lesson(conf)
+
+                        # Ausfallsicherheit: Bei einer vorübergehenden Störung lieber den
+                        # zuletzt abgerufenen Tagesplan weiterzeigen als eine Fehlermeldung.
+                        if data is None and err in TRANSIENT_ERRORS:
+                            fallback = get_offline_fallback(conf)
+                            if fallback is not None:
+                                logging.warning(f"WebUntis nicht erreichbar ({err}) - "
+                                                "zeige zuletzt abgerufene Plandaten.")
+                                data, err = fallback
+                                is_stale = True
+
+                    # Cachen der Ergebnisse für das Webinterface
+                    with app_state.state_lock:
+                        app_state.current_display_data = data
+                        app_state.current_display_msg = err
+                        app_state.data_is_stale = is_stale
+
+                    current_date = current_dt.strftime("%Y-%m-%d")
+                    is_static_day = err in ["Schönes Wochenende!", "Unterrichtsfrei"] or (isinstance(err, str) and "Ferien" in err)
+                
+                    # E-Paper Schonung: Statische Meldungen (z.B. Ferien) zeichnen wir nur einmal pro Tag neu
+                    skip_update = False
+                    if is_static_day and not is_manual:
+                        if last_static_date == current_date: skip_update = True
+                        else: last_static_date = current_date 
+                    else: last_static_date = None 
+                    
+                    if not skip_update:
+                        update_display_logic(data, err, conf, stale=is_stale)
+                else:
+                    clear_display_once()
+                
+                last_update = time.time()
+                app_state.shutdown_event.wait(1.5)
+                clear_touch_interrupt_via_i2c()
+                last_touch_time = time.time()
+            
+            # Kurze Pause verhindert CPU-Spam (100% Auslastung)
+            app_state.shutdown_event.wait(0.5)
+        except Exception:
+            # AUFFANGNETZ: Ohne diesen Block wuerde eine unerwartete Ausnahme
+            # diesen Thread beenden. Das Display bliebe dann fuer immer stehen,
+            # waehrend der Webserver in seinem eigenen Thread weiterlaeuft und
+            # das System dadurch voellig gesund aussieht - ein Ausfall, der
+            # niemandem auffaellt, bis jemand vor der Tuer steht.
+            # logging.exception() schreibt den vollstaendigen Aufrufpfad mit,
+            # damit die Ursache im Journal nachvollziehbar bleibt.
+            logging.exception("Unerwarteter Fehler in der Hintergrundschleife - es wird weitergearbeitet.")
+            # Laengere Pause, damit ein dauerhaft auftretender Fehler weder das
+            # Log flutet noch den Pi unnoetig belastet.
+            app_state.shutdown_event.wait(BACKGROUND_ERROR_PAUSE)
 
 
 # ==============================================================================
