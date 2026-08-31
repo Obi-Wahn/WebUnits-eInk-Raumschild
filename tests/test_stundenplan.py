@@ -6,7 +6,7 @@ jedem Zeitpunkt die richtige Stunde herausfallen.
 """
 import datetime
 
-import raumanzeige as R
+import tuerschild as R
 from conftest import MONTAG, RohStunde, uhrzeit
 
 

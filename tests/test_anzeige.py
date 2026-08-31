@@ -8,7 +8,7 @@ richtige Information erhalten bleibt.
 Gezeichnet wird mit echtem Pillow, aber in einen Speicherpuffer (siehe
 conftest.py). Layoutfehler fallen dadurch auf, ohne das Panel zu beruehren.
 """
-import raumanzeige as R
+import tuerschild as R
 from conftest import uhrzeit
 
 

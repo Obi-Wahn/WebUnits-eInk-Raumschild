@@ -9,7 +9,8 @@ import base64
 import statistics
 import time
 
-import raumanzeige as R
+import tuerschild as R
+from tuerschild import web
 from conftest import uhrzeit
 
 
@@ -117,13 +118,13 @@ def test_csrf_token_wird_zeitkonstant_verglichen(webclient, monkeypatch):
     faellt damit auf.
     """
     aufrufe = []
-    echt = R.secrets.compare_digest
+    echt = web.secrets.compare_digest
 
     def mitschreiben(a, b):
         aufrufe.append((a, b))
         return echt(a, b)
 
-    monkeypatch.setattr(R.secrets, "compare_digest", mitschreiben)
+    monkeypatch.setattr(web.secrets, "compare_digest", mitschreiben)
 
     client, kopf = webclient
     client.post("/update", headers=kopf, data={"csrf_token": R.app_state.csrf_token})

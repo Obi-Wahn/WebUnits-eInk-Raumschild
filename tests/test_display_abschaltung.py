@@ -10,16 +10,17 @@ import time
 
 import pytest
 
-import raumanzeige as R
+import tuerschild as R
+from tuerschild import steuerung
 from conftest import uhrzeit
 
 
 @pytest.fixture
 def schleife(conf, monkeypatch):
     """Startet die Hintergrundschleife ohne Netzwerkzugriff."""
-    monkeypatch.setattr(R, "get_current_lesson",
+    monkeypatch.setattr(steuerung, "get_current_lesson",
                         lambda c: ({"current": None, "next": None}, ""))
-    monkeypatch.setattr(R, "BACKGROUND_ERROR_PAUSE", 0.05)
+    monkeypatch.setattr(steuerung, "BACKGROUND_ERROR_PAUSE", 0.05)
 
     R.app_state.shutdown_event.clear()
     thread = threading.Thread(target=R.background_loop, daemon=True)
@@ -47,13 +48,13 @@ def test_abgeschaltetes_display_wird_nur_einmal_geloescht(conf, monkeypatch,
     Stundengrenze - also alle paar Minuten, den ganzen Tag.
     """
     aus = {**conf, "DISPLAY_ACTIVE": False}
-    monkeypatch.setattr(R, "get_cached_config", lambda: aus)
+    monkeypatch.setattr(steuerung, "get_cached_config", lambda: aus)
 
     # Die reguläre Auslösung ist das Abrufintervall - NICHT der Knopf im
     # Web-Interface. Wir verkuerzen das Intervall auf null, damit in wenigen
     # Sekunden mehrere Zyklen zustande kommen, und setzen eine Uhrzeit
     # innerhalb der Schulzeit, weil das Intervall sonst gar nicht greift.
-    monkeypatch.setattr(R, "get_update_interval", lambda c: 0)
+    monkeypatch.setattr(steuerung, "get_update_interval", lambda c: 0)
     R.app_state.simulated_datetime = uhrzeit(10, 0)
     R.app_state.simulation_started_at = time.time()
 
@@ -72,7 +73,7 @@ def test_manuelles_update_loescht_erneut(conf, monkeypatch, display_attrappe, sc
     bereits abgeschaltet ist.
     """
     aus = {**conf, "DISPLAY_ACTIVE": False}
-    monkeypatch.setattr(R, "get_cached_config", lambda: aus)
+    monkeypatch.setattr(steuerung, "get_cached_config", lambda: aus)
 
     def zweimal_druecken():
         for _ in range(3):
@@ -92,7 +93,7 @@ def test_manuelles_update_loescht_erneut(conf, monkeypatch, display_attrappe, sc
 def test_beim_abschalten_wird_geloescht(conf, monkeypatch, display_attrappe, schleife):
     """Der Wechsel von an auf aus muss das Panel einmal leeren."""
     zustand = {"conf": dict(conf)}
-    monkeypatch.setattr(R, "get_cached_config", lambda: zustand["conf"])
+    monkeypatch.setattr(steuerung, "get_cached_config", lambda: zustand["conf"])
 
     def umschalten():
         time.sleep(0.4)
@@ -110,7 +111,7 @@ def test_beim_abschalten_wird_geloescht(conf, monkeypatch, display_attrappe, sch
 
 def test_bei_aktivem_display_wird_nicht_geloescht(conf, monkeypatch,
                                                   display_attrappe, schleife):
-    monkeypatch.setattr(R, "get_cached_config", lambda: conf)
+    monkeypatch.setattr(steuerung, "get_cached_config", lambda: conf)
     schleife(dauer=2.0)
     assert display_attrappe.anzahl_loeschen == 0
     assert display_attrappe.anzahl_anzeigen >= 1

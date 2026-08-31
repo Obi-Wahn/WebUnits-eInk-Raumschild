@@ -26,7 +26,8 @@ import pytest
 
 # Das Hauptprogramm liegt eine Ebene ueber diesem Verzeichnis
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import raumanzeige as R  # noqa: E402
+import tuerschild as R  # noqa: E402
+from tuerschild import hardware, konfiguration  # noqa: E402
 
 # Ein Montag - als fester Bezugspunkt fuer alle Zeitrechnungen.
 # Feste Daten statt "heute" halten die Tests reproduzierbar: Ein Test, der nur
@@ -142,7 +143,7 @@ def display_attrappe(monkeypatch):
     E-Paper ansteuern.
     """
     attrappe = DisplayAttrappe()
-    monkeypatch.setattr(R, "epd2in13_V3", types.SimpleNamespace(EPD=lambda: attrappe))
+    monkeypatch.setattr(hardware, "epd2in13_V3", types.SimpleNamespace(EPD=lambda: attrappe))
     return attrappe
 
 
@@ -165,13 +166,13 @@ def sauberer_zustand():
     ]
     vorher = {name: getattr(R.app_state, name) for name in felder}
     vorher["failed_logins"] = dict(R.app_state.failed_logins)
-    konfigpfad = R.CONFIG_FILE
+    konfigpfad = konfiguration.CONFIG_FILE
 
     yield
 
     for name, wert in vorher.items():
         setattr(R.app_state, name, wert)
-    R.CONFIG_FILE = konfigpfad
+    konfiguration.CONFIG_FILE = konfigpfad
 
 
 @pytest.fixture
@@ -224,7 +225,7 @@ def webclient(conf):
               datei, ensure_ascii=False)
     datei.close()
 
-    R.CONFIG_FILE = datei.name
+    konfiguration.CONFIG_FILE = datei.name
     R.app_state.last_config_mtime = 0
 
     import base64

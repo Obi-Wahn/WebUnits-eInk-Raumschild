@@ -12,7 +12,7 @@ vollstaendig umgehen. Beides wird hier geprueft.
 import base64
 import time
 
-import raumanzeige as R
+import tuerschild as R
 
 
 def _falsche_daten():

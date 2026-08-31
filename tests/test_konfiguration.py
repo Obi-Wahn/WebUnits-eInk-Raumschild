@@ -9,7 +9,8 @@ import os
 import socket
 import tempfile
 
-import raumanzeige as R
+import tuerschild as R
+from tuerschild import konfiguration
 
 
 # ==============================================================================
@@ -53,7 +54,7 @@ def test_mindestwert_ist_nicht_kleiner_als_eine_minute():
 def test_speichern_und_lesen_im_wechsel(conf):
     datei = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8")
     datei.close()
-    R.CONFIG_FILE = datei.name
+    konfiguration.CONFIG_FILE = datei.name
     R.app_state.last_config_mtime = 0
     try:
         R.save_config({**conf, "ROOM_NAME": "Testraum"})
@@ -71,7 +72,7 @@ def test_gespeicherte_datei_ist_nur_fuer_den_besitzer_lesbar(conf):
     """
     datei = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8")
     datei.close()
-    R.CONFIG_FILE = datei.name
+    konfiguration.CONFIG_FILE = datei.name
     try:
         R.save_config(conf)
         rechte = os.stat(datei.name).st_mode & 0o777
@@ -84,7 +85,7 @@ def test_umlaute_bleiben_lesbar(conf):
     """ensure_ascii=False - sonst stuenden Feriennamen als \\u00e4 in der Datei."""
     datei = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8")
     datei.close()
-    R.CONFIG_FILE = datei.name
+    konfiguration.CONFIG_FILE = datei.name
     R.app_state.last_config_mtime = 0
     try:
         R.save_config({**conf, "ROOM_NAME": "Übungsraum"})
@@ -96,7 +97,7 @@ def test_umlaute_bleiben_lesbar(conf):
 
 
 def test_fehlende_datei_ergibt_leere_konfiguration():
-    R.CONFIG_FILE = "/gibt/es/nicht/config.json"
+    konfiguration.CONFIG_FILE = "/gibt/es/nicht/config.json"
     R.app_state.last_config_mtime = 0
     R.app_state.cached_config = {}
     assert R.get_cached_config() == {}
@@ -106,7 +107,7 @@ def test_beschaedigte_datei_legt_das_programm_nicht_lahm():
     datei = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8")
     datei.write("{ das ist kein gueltiges JSON")
     datei.close()
-    R.CONFIG_FILE = datei.name
+    konfiguration.CONFIG_FILE = datei.name
     R.app_state.last_config_mtime = 0
     R.app_state.cached_config = {}
     try:

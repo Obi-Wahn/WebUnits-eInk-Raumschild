@@ -13,7 +13,7 @@ import datetime
 
 import pytest
 
-import raumanzeige as R
+import tuerschild as R
 from conftest import MONTAG, RohStunde, uhrzeit
 
 
