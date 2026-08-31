@@ -106,6 +106,34 @@ def test_post_mit_richtigem_token_wird_angenommen(webclient):
     assert R.app_state.force_update_flag is True
 
 
+def test_csrf_token_wird_zeitkonstant_verglichen(webclient, monkeypatch):
+    """
+    Der Unterschied zwischen '==' und secrets.compare_digest() ist reines
+    Zeitverhalten und liesse sich bei einem 64-Zeichen-Token nicht zuverlaessig
+    messen - der Vergleich ist dafuer viel zu schnell.
+
+    Statt der Zeit pruefen wir deshalb die Zusammenarbeit: Wird beim Vergleich
+    des Tokens ueberhaupt compare_digest aufgerufen? Ein Rueckfall auf '=='
+    faellt damit auf.
+    """
+    aufrufe = []
+    echt = R.secrets.compare_digest
+
+    def mitschreiben(a, b):
+        aufrufe.append((a, b))
+        return echt(a, b)
+
+    monkeypatch.setattr(R.secrets, "compare_digest", mitschreiben)
+
+    client, kopf = webclient
+    client.post("/update", headers=kopf, data={"csrf_token": R.app_state.csrf_token})
+
+    # check_auth vergleicht ebenfalls zeitkonstant - uns interessiert der
+    # Aufruf, an dem der CSRF-Token beteiligt war.
+    assert any(R.app_state.csrf_token in paar for paar in aufrufe), \
+        "Der CSRF-Token wurde nicht mit compare_digest verglichen"
+
+
 def test_systembefehle_sind_ebenfalls_geschuetzt(webclient):
     """Ueber diese Routen laesst sich der Pi neu starten - ohne Token niemals."""
     client, kopf = webclient

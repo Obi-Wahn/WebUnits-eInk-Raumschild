@@ -29,6 +29,7 @@ import datetime
 import json
 import threading
 import socket
+import ipaddress
 import tempfile
 import subprocess
 import logging
@@ -100,6 +101,23 @@ TOUCH_RST_PIN = 22
 TOUCH_I2C_ADDR = 0x14           # Hexadezimale I2C-Adresse des Touch-Chips
 TOUCH_COOLDOWN = 5.0            # Entprell-Zeit in Sekunden (verhindert Touch-Spam)
 BACKGROUND_ERROR_PAUSE = 30     # Wartezeit nach einem unerwarteten Schleifenfehler
+
+# Adressen, hinter denen unser eigener Reverse Proxy (Nginx) sitzt. Nur wenn
+# eine Anfrage von hier kommt, werten wir die Kopfzeilen aus, in denen der
+# Proxy die echte Adresse des Aufrufers vermerkt hat.
+TRUSTED_PROXIES = {"127.0.0.1", "::1"}
+
+# Rate-Limiting gegen automatisiertes Passwortraten
+MAX_LOGIN_ATTEMPTS = 5          # Fehlversuche bis zur Sperre
+LOGIN_LOCKOUT_SECONDS = 60      # Dauer der Sperre
+FAILED_LOGIN_TTL = 3600         # Einträge nach einer Stunde ohne Aktivität verwerfen
+FAILED_LOGIN_MAX = 1000         # harte Obergrenze gegen unbegrenztes Wachstum
+
+# Zeitsimulation: Nach dieser Zeit kehrt das Programm von selbst zur echten Uhr
+# zurueck. Ohne Grenze wuerde ein vergessener Testlauf dazu fuehren, dass das
+# Schild dauerhaft einen falschen Tag anzeigt - fuer die Person davor nicht
+# erkennbar, weil ein plausibles Datum in der Kopfzeile steht.
+SIMULATION_MAX_SECONDS = 7200   # 2 Stunden
 HOLIDAYS_CACHE_SECONDS = 86400  # API-Schonung: Ferien für 24 Stunden im RAM cachen
 
 # Grenzen für das automatische Abrufintervall.
@@ -193,6 +211,9 @@ class AppState:
         
         # Caches & Simulation (Zwischenspeicher im RAM für mehr Performance)
         self.simulated_datetime: Optional[datetime.datetime] = None
+        # Zeitpunkt (Systemuhr), zu dem die Simulation gesetzt wurde - fuer den
+        # automatischen Rueckfall nach SIMULATION_MAX_SECONDS
+        self.simulation_started_at: Optional[float] = None
         self.current_display_data: Optional[Dict[str, Optional[Lesson]]] = None
         self.current_display_msg: str = "Warte auf erstes Update..."
         self.cached_config: Dict[str, Any] = {}
@@ -286,13 +307,34 @@ def get_update_interval(conf: Dict[str, Any]) -> int:
 
 def get_now() -> datetime.datetime:
     """
-    Gibt die aktuelle Zeit zurück. 
-    Abstrahiert die Systemzeit, um das Zeit-Simulations-Feature im Web-Interface 
+    Gibt die aktuelle Zeit zurück.
+    Abstrahiert die Systemzeit, um das Zeit-Simulations-Feature im Web-Interface
     zu ermöglichen (Time-Travel-Tests für Ferien und Randfälle).
+
+    SICHERUNG GEGEN VERGESSENE SIMULATION:
+    Eine gesetzte Simulationszeit gilt nur für SIMULATION_MAX_SECONDS, danach
+    kehrt das Programm von selbst zur echten Uhr zurück. Ohne diese Grenze
+    würde ein vergessener Testlauf dazu führen, dass das Schild auf unbestimmte
+    Zeit einen falschen Tag anzeigt - und zwar unauffällig, weil in der
+    Kopfzeile ein völlig plausibles Datum steht.
     """
     with app_state.state_lock:
         if app_state.simulated_datetime:
-            return app_state.simulated_datetime
+            # Fehlt der Startzeitpunkt, beginnt die Frist jetzt. So kann das
+            # Setzen der Simulation niemals dadurch wirkungslos werden, dass
+            # zwei zusammengehoerige Felder auseinanderlaufen - die Simulation
+            # geht im Zweifel nicht verloren, sie laeuft nur spaeter ab.
+            if app_state.simulation_started_at is None:
+                app_state.simulation_started_at = time.time()
+
+            laufzeit = time.time() - app_state.simulation_started_at
+            if laufzeit < SIMULATION_MAX_SECONDS:
+                return app_state.simulated_datetime
+
+            logging.info("Zeitsimulation abgelaufen - zurück zur Echtzeit.")
+            app_state.simulated_datetime = None
+            app_state.simulation_started_at = None
+            app_state.force_update_flag = True
     return datetime.datetime.now()
 
 
@@ -922,6 +964,9 @@ def background_loop() -> None:
     last_touch_time = time.time()
     last_minute_triggered = None
     last_static_date = None
+    # None = noch unbekannt. Dadurch wird beim ersten Durchlauf mit
+    # abgeschaltetem Display einmal geloescht, danach nicht mehr.
+    display_war_aktiv = None
 
     while not app_state.shutdown_event.is_set():
         try:
@@ -1049,7 +1094,16 @@ def background_loop() -> None:
                     if not skip_update:
                         update_display_logic(data, err, conf, stale=is_stale)
                 else:
-                    clear_display_once()
+                    # E-PAPER SCHONEN: Nur beim Abschalten einmal loeschen.
+                    # Frueher lief dieser Zweig bei jedem Intervall und an jeder
+                    # Stundengrenze - also ein vollstaendiger Loeschzyklus auf
+                    # einem bereits leeren Panel, alle paar Minuten, den ganzen
+                    # Tag. Ein manuelles Update loescht weiterhin, damit sich
+                    # ein verschmutztes Bild von Hand bereinigen laesst.
+                    if display_war_aktiv is not False or is_manual:
+                        clear_display_once()
+
+                display_war_aktiv = conf.get('DISPLAY_ACTIVE', True)
                 
                 last_update = time.time()
                 app_state.shutdown_event.wait(1.5)
@@ -1119,45 +1173,117 @@ def authenticate():
     'Zugriff verweigert. Bitte korrekte Zugangsdaten eingeben.\n', 401,
     {'WWW-Authenticate': 'Basic realm="Tuerschild Admin-Bereich"'})
 
+def get_client_ip() -> str:
+    """
+    Ermittelt die Adresse des Rechners, von dem eine Anfrage stammt.
+
+    TECHNISCHER HINTERGRUND (Warum nicht einfach request.remote_addr?):
+    Waitress lauscht nur auf dem Localhost, davor sitzt Nginx. Aus Sicht von
+    Flask kommt deshalb JEDE Anfrage von 127.0.0.1 - egal, wer sie gestellt
+    hat. Der Rate-Limiter zaehlte dadurch alle Zugriffe in einen gemeinsamen
+    Topf: Fuenf Fehlversuche eines Fremden haetten die Lehrkraft im Nachbarraum
+    mit ausgesperrt, und eine gezielte Begrenzung pro Angreifer fand gar nicht
+    statt.
+
+    Nginx vermerkt die echte Adresse in der Kopfzeile X-Real-IP.
+
+    SICHERHEITSHINWEIS: Solche Kopfzeilen darf man nur auswerten, wenn die
+    Anfrage tatsaechlich vom eigenen Proxy kommt. Andernfalls koennte jeder
+    Angreifer sich durch eine selbst gesetzte Kopfzeile bei jedem Versuch eine
+    neue Adresse geben und die Sperre damit vollstaendig umgehen. Deshalb die
+    Pruefung gegen TRUSTED_PROXIES.
+    """
+    direkt = request.remote_addr or "unbekannt"
+    if direkt not in TRUSTED_PROXIES:
+        return direkt
+
+    kandidat = request.headers.get("X-Real-IP", "").strip()
+    if not kandidat:
+        # X-Forwarded-For ist eine Kette. Der Proxy haengt die von IHM gesehene
+        # Adresse hinten an; die vorderen Eintraege stammen moeglicherweise vom
+        # Aufrufer selbst und sind damit faelschbar. Wir nehmen den letzten.
+        kette = request.headers.get("X-Forwarded-For", "")
+        if kette:
+            kandidat = kette.split(",")[-1].strip()
+
+    if not kandidat:
+        return direkt
+
+    # Nur eine echte IP-Adresse akzeptieren. Beliebiger Text als Schluessel
+    # waere ein bequemer Weg, den Speicher vollzuschreiben.
+    try:
+        ipaddress.ip_address(kandidat)
+    except ValueError:
+        logging.warning(f"Unbrauchbare Adresse in der Proxy-Kopfzeile verworfen: {kandidat[:40]!r}")
+        return direkt
+    return kandidat
+
+def cleanup_failed_logins(jetzt: float) -> None:
+    """
+    Entfernt veraltete Eintraege aus der Fehlversuchs-Liste.
+
+    Ohne diese Bereinigung waechst die Liste unbegrenzt: Jede Adresse, die
+    jemals einen Fehlversuch hatte, bliebe fuer immer im Speicher. Auf einem
+    Geraet mit 512 MB ist das kein theoretisches Problem.
+
+    ACHTUNG: Muss unter app_state.state_lock aufgerufen werden.
+    """
+    veraltet = [ip for ip, daten in app_state.failed_logins.items()
+                if jetzt - daten.get('last_seen', 0) > FAILED_LOGIN_TTL]
+    for ip in veraltet:
+        del app_state.failed_logins[ip]
+
+    # Notbremse, falls sehr viele Adressen in kurzer Zeit auftauchen:
+    # die am laengsten unbenutzten zuerst verwerfen.
+    ueberzaehlig = len(app_state.failed_logins) - FAILED_LOGIN_MAX
+    if ueberzaehlig > 0:
+        nach_alter = sorted(app_state.failed_logins.items(),
+                            key=lambda eintrag: eintrag[1].get('last_seen', 0))
+        for ip, _ in nach_alter[:ueberzaehlig]:
+            del app_state.failed_logins[ip]
+
 def requires_auth(f):
     """
     Decorator (@requires_auth) für alle geschützten Flask-Routen.
-    
+
     TECHNISCHER HINTERGRUND (Sicherheit & Rate Limiting):
-    Hier wird nicht nur das Passwort geprüft, sondern auch ein In-Memory Rate Limiter 
-    implementiert. Er sperrt eine IP-Adresse für 60 Sekunden, sobald 5 Fehlversuche 
-    registriert wurden. Das schützt den Raspberry Pi vor automatisierten Brute-Force-Angriffen.
+    Hier wird nicht nur das Passwort geprüft, sondern auch ein Rate Limiter im
+    Arbeitsspeicher geführt. Er sperrt eine Adresse für eine Minute, sobald
+    fünf Fehlversuche registriert wurden. Das schützt den Raspberry Pi vor
+    automatisiertem Passwortraten.
     """
     @wraps(f)
     def decorated(*args, **kwargs):
-        ip = request.remote_addr
+        ip = get_client_ip()
         now = time.time()
-        
-        # 1. Rate Limiting Check (Wurde diese IP bereits blockiert?)
+
+        # 1. Rate Limiting Check (Wurde diese Adresse bereits blockiert?)
         with app_state.state_lock:
+            cleanup_failed_logins(now)
             attempt_data = app_state.failed_logins.get(ip, {'count': 0, 'lockout_until': 0})
             if now < attempt_data['lockout_until']:
                 wait_time = int(attempt_data['lockout_until'] - now)
                 abort(429, description=f"Zu viele Fehlversuche. Bitte warten Sie {wait_time} Sekunden.")
-        
+
         # 2. Login-Überprüfung
         auth = request.authorization
         if not auth or not check_auth(auth.username, auth.password):
             # Fehlversuch protokollieren und Zähler erhöhen
             with app_state.state_lock:
                 attempt_data['count'] += 1
-                if attempt_data['count'] >= 5:
-                    logging.warning(f"Brute-Force Schutz: IP {ip} temporär gesperrt.")
-                    attempt_data['lockout_until'] = now + 60
-                    attempt_data['count'] = 0 # Reset des Zählers nach Sperre
+                attempt_data['last_seen'] = now
+                if attempt_data['count'] >= MAX_LOGIN_ATTEMPTS:
+                    logging.warning(f"Brute-Force Schutz: {ip} temporär gesperrt.")
+                    attempt_data['lockout_until'] = now + LOGIN_LOCKOUT_SECONDS
+                    attempt_data['count'] = 0  # Reset des Zählers nach Sperre
                 app_state.failed_logins[ip] = attempt_data
             return authenticate()
-        
-        # 3. Erfolgreicher Login -> Rate-Limiter Zähler für diese IP bereinigen
+
+        # 3. Erfolgreicher Login -> Zähler für diese Adresse bereinigen
         with app_state.state_lock:
             if ip in app_state.failed_logins:
                 del app_state.failed_logins[ip]
-                
+
         return f(*args, **kwargs)
     return decorated
 
@@ -1171,7 +1297,10 @@ def verify_csrf(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         token = request.form.get('csrf_token')
-        if not token or token != app_state.csrf_token:
+        # Zeitkonstanter Vergleich, aus demselben Grund wie beim Benutzernamen:
+        # '!=' bricht beim ersten abweichenden Zeichen ab und verraet ueber die
+        # Antwortzeit, wie viele Zeichen bereits stimmen.
+        if not token or not secrets.compare_digest(str(token), app_state.csrf_token):
             abort(403, description="Ungültiger CSRF Token. Bitte Seite neu laden.")
         return f(*args, **kwargs)
     return decorated
@@ -1473,6 +1602,7 @@ def simulate_time():
             parsed_time = datetime.datetime.strptime(sim_time_str, "%Y-%m-%dT%H:%M")
             with app_state.state_lock:
                 app_state.simulated_datetime = parsed_time
+                app_state.simulation_started_at = time.time()
                 app_state.force_update_flag = True
         except Exception as e:
             logging.error(f"Fehler beim Parsen der Simulationszeit: {e}")
@@ -1484,6 +1614,7 @@ def simulate_time():
 def reset_time():
     with app_state.state_lock:
         app_state.simulated_datetime = None
+        app_state.simulation_started_at = None
         app_state.force_update_flag = True
     return redirect('/')
 
