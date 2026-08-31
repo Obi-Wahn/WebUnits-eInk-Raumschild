@@ -1,0 +1,44 @@
+name: Tests
+
+# Laeuft bei jedem Push auf main und bei jedem Pull Request. Dadurch steht das
+# Ergebnis im Pull Request selbst - sichtbar, bevor jemand auf "Merge" klickt.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Die beiden Fassungen, die auf Raspberry Pi OS vorkommen:
+        # Bookworm liefert Python 3.11, Trixie liefert 3.13.
+        python-version: ["3.11", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Python ${{ matrix.python-version }} einrichten
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Schriftarten installieren
+        # Die Layouttests messen echte Textbreiten. Fehlt DejaVu, weicht das
+        # Programm auf eine Ersatzschrift aus und die Messwerte waeren andere
+        # als auf dem Geraet.
+        run: sudo apt-get update && sudo apt-get install -y fonts-dejavu-core
+
+      - name: Abhaengigkeiten installieren
+        # Bewusst requirements-dev.txt statt requirements.txt: Die
+        # Hardware-Pakete (RPi.GPIO, spidev, lgpio) lassen sich auf einem
+        # gewoehnlichen Rechner nicht installieren. Das Programm faengt ihr
+        # Fehlen ab und laeuft im Simulationsmodus - genau deshalb sind die
+        # Tests hier ueberhaupt ausfuehrbar.
+        run: pip install -r requirements-dev.txt
+
+      - name: Tests ausfuehren
+        run: pytest -q
