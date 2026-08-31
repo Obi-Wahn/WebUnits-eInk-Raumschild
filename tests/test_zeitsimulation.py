@@ -9,7 +9,7 @@ steht dann ein voellig plausibles, aber falsches Datum.
 import datetime
 import time
 
-import raumanzeige as R
+import tuerschild as R
 from conftest import uhrzeit
 
 

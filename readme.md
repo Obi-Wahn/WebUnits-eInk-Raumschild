@@ -96,6 +96,25 @@ Das Programm erfordert eine Konfigurationsdatei namens `config.json` im Hauptver
 3. **Standard-Passwörter ändern:** Ändern Sie zwingend die voreingestellten Werte für ADMIN\_USER und ADMIN\_PASS in der config.json vor der ersten produktiven Inbetriebnahme im Netzwerk.  
 4. **Versionskontrolle (.gitignore):** Sollten Sie eigene Anpassungen an diesem Code-Repository vornehmen und dieses veröffentlichen wollen, stellen Sie sicher, dass die Datei config.json sowie etwaige Log-Dateien durch die .gitignore vom Upload ausgeschlossen sind. Reale Schul-, Nutzer- oder Zugangsdaten dürfen nicht in öffentliche Repositories gelangen.
 
+## **📂 Aufbau des Programms**
+
+Der Programmcode liegt im Paket `tuerschild/`, aufgeteilt in Ebenen, die aufeinander aufbauen und nur nach unten greifen:
+
+| Modul | Aufgabe |
+|---|---|
+| `konstanten.py` | Feste Werte und Pfade, ohne Abhängigkeiten |
+| `zustand.py` | Datenstrukturen (`Lesson`, `TimedLesson`) und gemeinsamer Zustand |
+| `konfiguration.py` | `config.json` lesen und schreiben, Uhrzeit samt Simulation |
+| `hardware.py` | GPIO, I2C-Touch, Displaytreiber, Schriftarten |
+| `anzeige.py` | Layout und Zeichnen auf dem E-Paper |
+| `untis.py` | Abruf der Plandaten und Offline-Rücklage |
+| `web.py` | Flask-Oberfläche zur Administration |
+| `steuerung.py` | Hintergrundschleife, die alles zusammenführt |
+
+Gestartet wird weiterhin über `raumanzeige.py` im Projektverzeichnis — dort steht nur noch, was zum Starten und sauberen Beenden gehört.
+
+*Hinweis für Änderungen:* Soll in Tests eine Funktion ersetzt werden, muss das im **definierenden** Modul geschehen (etwa `tuerschild.hardware.epd2in13_V3`). Die Sammel-Importe in `tuerschild/__init__.py` sind Kopien der Verweise; ein Ersetzen dort träfe nur diese Kopie.
+
 ## **🧪 Tests**
 
 Das Projekt bringt eine automatisierte Testsuite mit. Sie prüft die Logik des Programms — Stundenauswahl, Offline-Rücklage, Textlayout, Konfigurationsgrenzen sowie Anmeldung und CSRF-Schutz des Web-Interfaces.

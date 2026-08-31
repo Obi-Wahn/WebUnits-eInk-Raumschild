@@ -10,7 +10,8 @@ import socket
 
 import pytest
 
-import raumanzeige as R
+import tuerschild as R
+from tuerschild import untis
 from conftest import MONTAG, RohStunde, uhrzeit
 
 
@@ -70,7 +71,7 @@ def sitzung(monkeypatch):
     notizen = {}
 
     def einrichten(**kwargs):
-        monkeypatch.setattr(R.webuntis, "Session",
+        monkeypatch.setattr(untis.webuntis, "Session",
                             lambda **_: SitzungsAttrappe(notizen, **kwargs))
         R.app_state.simulated_datetime = uhrzeit(8, 20)
         return notizen
