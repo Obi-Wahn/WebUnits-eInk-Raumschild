@@ -132,7 +132,9 @@ Der sinnvolle Zeitpunkt dafür ist **nach einem `git pull` und vor dem Neustart 
 
 **Automatisch bei GitHub:** Bei jedem Push und jedem Pull Request läuft die Suite unter Python 3.11 und 3.13 (siehe `.github/workflows/tests.yml`). Das Ergebnis erscheint direkt im Pull Request.
 
-*Sicherheitshinweis:* Die Tests ersetzen den Displaytreiber grundsätzlich durch eine Attrappe. Gezeichnet wird mit echtem Pillow in einen Speicherpuffer — Layoutfehler fallen also auf, das E-Paper wird aber nie angesteuert. Ein Testlauf während des laufenden Betriebs stört die Anzeige nicht.
+*Sicherheitshinweis:* Die Tests fassen die Hardware nicht an. Dafür sorgen zwei Vorkehrungen: `tests/conftest.py` setzt die Umgebungsvariable `TUERSCHILD_OHNE_HARDWARE=1`, bevor das Paket geladen wird — damit werden GPIO, I2C und der Displaytreiber gar nicht erst eingebunden. Zusätzlich ersetzt eine Vorrichtung den Treiber vor jedem einzelnen Test durch eine Attrappe; gezeichnet wird mit echtem Pillow in einen Speicherpuffer, Layoutfehler fallen also auf. Ein Testlauf während des laufenden Betriebs stört die Anzeige nicht.
+
+> Die Sperre ist nötig, weil der Waveshare-Treiber die GPIO-Pins **schon beim Import** belegt. Ohne sie brach die Testsuite bei laufendem Programm mit `lgpio.error: 'GPIO busy'` ab — die Attrappe allein greift erst danach und damit zu spät. Im Betrieb wird die Variable nirgends gesetzt; `raumanzeige.py` lädt die Hardware wie gewohnt.
 
 *Was die Tests nicht abdecken:* Die Hardware selbst — SPI-Übertragung, I2C-Touch und das tatsächliche Erscheinungsbild auf dem Panel. Dafür bleiben der Testlauf-Knopf im Web-Interface und der Blick auf das Schild.
 

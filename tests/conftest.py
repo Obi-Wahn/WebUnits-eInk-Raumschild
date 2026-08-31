@@ -10,10 +10,21 @@ Die Tests laufen auch auf dem Raspberry Pi selbst - also auf einem Geraet, an
 dem das echte E-Paper haengt und der Dienst womoeglich gerade laeuft. Ohne
 Vorkehrung wuerde ein Test das Display tatsaechlich ansteuern und mitten im
 Schulbetrieb einen vollen Loeschzyklus ausloesen.
-Die Vorrichtung 'display_attrappe' verhindert das: Sie ersetzt den Treiber vor
-JEDEM Test durch eine Attrappe (autouse=True). Gezeichnet wird mit echtem
-Pillow in einen Speicherpuffer - Layoutfehler fallen also auf, das Panel wird
-aber nie beruehrt.
+Dafuer greifen zwei Vorkehrungen ineinander:
+
+1. TUERSCHILD_OHNE_HARDWARE (ganz unten in dieser Beschreibung, im Code aber
+   ganz oben): Sie muss VOR dem Import des Pakets gesetzt sein und verhindert,
+   dass die Hardware-Bibliotheken ueberhaupt geladen werden.
+2. Die Vorrichtung 'display_attrappe': Sie ersetzt den Treiber vor JEDEM Test
+   durch eine Attrappe (autouse=True). Gezeichnet wird mit echtem Pillow in
+   einen Speicherpuffer - Layoutfehler fallen also auf, das Panel wird aber nie
+   beruehrt.
+
+Warum beides? Punkt 2 allein genuegt nicht. Der Waveshare-Treiber belegt die
+GPIO-Pins schon beim Import, also lange bevor eine Vorrichtung eingreifen kann.
+Auf dem Raspberry Pi hatte das zwei Folgen: Lief das Tuerschild gerade, brach
+schon das Einlesen dieser Datei mit "GPIO busy" ab; lief es nicht, griffen die
+Tests selbst nach den Pins. Punkt 1 schneidet das an der Wurzel ab.
 """
 import datetime
 import json
@@ -23,6 +34,13 @@ import tempfile
 import types
 
 import pytest
+
+# HARDWARE-SPERRE - DIESE ZEILE MUSS VOR DEM IMPORT DES PAKETS STEHEN.
+# Sie sorgt dafuer, dass tuerschild.hardware weder GPIO noch I2C noch den
+# Displaytreiber laedt. Rutscht sie hinter den Import, ist sie wirkungslos:
+# Python fuehrt ein Modul nur ein einziges Mal aus, und der Treiber hat die
+# Pins dann bereits angefasst. tests/test_hardwaresperre.py haelt das fest.
+os.environ["TUERSCHILD_OHNE_HARDWARE"] = "1"
 
 # Das Hauptprogramm liegt eine Ebene ueber diesem Verzeichnis
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
