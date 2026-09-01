@@ -182,7 +182,7 @@ def sauberer_zustand():
         "test_mode_active", "cached_config", "last_config_mtime",
         "cached_holidays", "last_holidays_fetch",
         "stoerung_seit", "stoerung_gemeldet",
-        "save_error", "save_ok", "rejected_schedule",
+        "save_error", "save_ok",
     ]
     vorher = {name: getattr(R.app_state, name) for name in felder}
     vorher["failed_logins"] = dict(R.app_state.failed_logins)

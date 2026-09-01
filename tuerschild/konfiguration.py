@@ -12,7 +12,7 @@ import logging
 import os
 import tempfile
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .konstanten import (DEFAULT_DAY_END, DEFAULT_DAY_START,
                          DEFAULT_UPDATE_SECONDS, MAX_UPDATE_SECONDS,
@@ -39,6 +39,11 @@ def get_cached_config() -> Dict[str, Any]:
                     content = f.read().strip()
                     app_state.cached_config = json.loads(content) if content else {}
                 app_state.last_config_mtime = mtime
+                # Nur bei einem tatsaechlichen Neueinlesen - diese Funktion
+                # wird mehrmals pro Sekunde aufgerufen, das Protokoll wuerde
+                # sonst zulaufen. Nach einer Aenderung der Datei steht der
+                # Hinweis genau einmal da.
+                melde_konfigurationsfehler(app_state.cached_config)
         except Exception as e:
             logging.error(f"FEHLER beim Laden der config.json: {e}")
         # Wichtig: Eine Kopie des Dictionaries zurückgeben (dict()), 
@@ -124,13 +129,20 @@ def pruefe_raumname(wert: Any) -> Tuple[Optional[str], Optional[str]]:
 
 def _pruefe_uhrzeit(wert: Any, wo: str) -> Tuple[Optional[str], Optional[str]]:
     """
-    Prueft eine einzelne Uhrzeit und gibt sie einheitlich als "HH:MM" zurueck.
+    Prueft eine einzelne Uhrzeit. Verlangt wird genau die Form "HH:MM".
 
-    Die Vereinheitlichung ist noetig, weil der uebrige Programmcode Uhrzeiten
-    als Zeichenketten vergleicht: parse_lesson() ordnet einer Stunde ihren Namen
-    zu, indem es die Startzeit der WebUntis-Stunde mit dem Eintrag im
-    Stundenplan vergleicht. "8:00" und "08:00" waeren fuer diesen Vergleich
-    verschiedene Zeiten - der Stundenname bliebe leer, ohne jede Fehlermeldung.
+    WARUM "8:00" NICHT DURCHGEHT, OBWOHL ES SICH LESEN LAESST:
+    Der uebrige Programmcode vergleicht Uhrzeiten als Zeichenketten.
+    parse_lesson() ordnet einer Stunde ihren Namen zu, indem es die Startzeit
+    aus WebUntis - immer zweistellig - mit dem Eintrag im Stundenplan
+    vergleicht. "8:00" trifft dabei auf nichts. Der Stundenname bleibt leer,
+    und zwar ohne jede Fehlermeldung.
+
+    Genau das ist der Tippfehler, den niemand als Tippfehler empfindet, und
+    deshalb wird er hier benannt statt stillschweigend zurechtgebogen: Diese
+    Pruefung schreibt die config.json nicht um, sie meldet nur. Wuerde sie die
+    kurze Schreibweise als gueltig durchwinken, bliebe der Fehler in der Datei
+    stehen und das Schild weiter stumm.
     """
     if wert is None:
         return None, f"{wo}: Die Uhrzeit fehlt."
@@ -139,7 +151,12 @@ def _pruefe_uhrzeit(wert: Any, wo: str) -> Tuple[Optional[str], Optional[str]]:
         zeit = datetime.datetime.strptime(text, "%H:%M").time()
     except ValueError:
         return None, f"{wo}: '{text}' ist keine Uhrzeit im Format HH:MM."
-    return zeit.strftime("%H:%M"), None
+
+    einheitlich = zeit.strftime("%H:%M")
+    if text != einheitlich:
+        return None, (f"{wo}: '{text}' muss zweistellig geschrieben werden "
+                      f"('{einheitlich}') - sonst bleibt der Stundenname leer.")
+    return einheitlich, None
 
 
 def _pruefe_eintraege(rohliste: Any, wo: str, hoechstzahl: int
@@ -180,31 +197,25 @@ def _pruefe_eintraege(rohliste: Any, wo: str, hoechstzahl: int
     return geprueft, None
 
 
-def pruefe_stundenplan(text: Any) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+def pruefe_stundenplan(roh: Any) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """
-    Prueft den Stundenplan aus dem Formular und gibt ihn aufgeraeumt zurueck.
+    Prueft den Stundenplan aus der config.json.
 
-    Der Stundenplan wird als JSON bearbeitet - dieselbe Form, in der er in der
-    config.json steht und in der die Anleitung ihn beschreibt. Ein
-    Formular mit Eingabefeldern pro Stunde waere bequemer, braeuchte aber
-    JavaScript zum Hinzufuegen und Entfernen von Zeilen; das Projekt kommt
-    bisher ohne aus.
+    WAS DER STUNDENPLAN IST - UND WAS NICHT:
+    Er enthaelt keine Plandaten. Die kommen ausschliesslich aus WebUntis und
+    werden von hier aus auch nie zurueckgeschrieben. SCHEDULE haelt nur fest,
+    wie dieses Geraet die Zeiten des Hauses benennt: dass "08:00" die 1. Stunde
+    ist und dass zwischen 13:20 und 13:55 Mittagspause statt "Raum ist frei"
+    auf dem Schild steht.
 
-    Wichtiger als die Bequemlichkeit ist ohnehin, dass nichts Unbrauchbares
-    gespeichert wird: Ein kaputter Stundenplan aeussert sich nicht als
-    Fehlermeldung, sondern als Schild, das keine Stundennamen mehr anzeigt oder
-    Pausen nicht mehr erkennt. Deshalb wird hier jede Uhrzeit einzeln geprueft
-    und die Rueckgabe enthaelt nur die bekannten Felder - alles Ueberzaehlige
-    faellt weg, statt unbemerkt in der config.json zu landen.
+    WARUM DAS GEPRUEFT WIRD:
+    Ein kaputter Stundenplan aeussert sich nicht als Fehlermeldung, sondern als
+    Schild, das keine Stundennamen mehr anzeigt oder Pausen nicht mehr erkennt.
+    Der haeufigste Fall ist "8:00" statt "08:00" - eine Schreibweise, die kein
+    Mensch als falsch empfindet, die parse_lesson() aber nie findet, weil dort
+    Zeichenketten verglichen werden. Wer die config.json von Hand bearbeitet,
+    sucht so einen Fehler lange.
     """
-    if text is None:
-        return None, "Der Stundenplan fehlt in der Anfrage."
-
-    try:
-        roh = json.loads(str(text))
-    except json.JSONDecodeError as e:
-        return None, f"Kein gültiges JSON: {e.msg} (Zeile {e.lineno}, Spalte {e.colno})."
-
     if not isinstance(roh, dict):
         return None, "Der Stundenplan muss ein JSON-Objekt sein (geschweifte Klammern)."
 
@@ -228,18 +239,44 @@ def pruefe_stundenplan(text: Any) -> Tuple[Optional[Dict[str, Any]], Optional[st
             "LESSONS": stunden, "BREAKS": pausen}, None
 
 
-def formatiere_stundenplan(conf: Dict[str, Any]) -> str:
-    """
-    Bereitet den Stundenplan fuer das Textfeld im Web-Formular auf.
 
-    Eingerueckt und mit echten Umlauten, damit die Datei im Browser lesbar
-    bleibt - json.dumps() wuerde sonst "\u00e4" schreiben.
+def pruefe_konfiguration(conf: Dict[str, Any]) -> List[str]:
     """
-    plan = conf.get("SCHEDULE")
-    if not isinstance(plan, dict):
-        plan = {"DAY_START": DEFAULT_DAY_START, "DAY_END": DEFAULT_DAY_END,
-                "LESSONS": [], "BREAKS": []}
-    return json.dumps(plan, indent=4, ensure_ascii=False)
+    Sammelt alles, was an einer geladenen config.json auffaellt.
+
+    WARUM BEIM LADEN UND NICHT NUR BEIM SPEICHERN:
+    Die Datei wird in aller Regel von Hand bearbeitet - per SSH, wie es die
+    Installationsanleitung beschreibt. Genau dieser Weg kam bisher an keiner
+    Pruefung vorbei. Die Fehler, die dabei entstehen, aeussern sich nicht als
+    Absturz, sondern als stille Unauffaelligkeit: leere Stundennamen, eine
+    Pause, die nicht erkannt wird, oder ein Schild, das "Raum None fehlt."
+    anzeigt, ohne dass irgendwo der Grund steht.
+
+    Es wird nur gewarnt, nichts abgelehnt. Ein Tuerschild, das wegen eines
+    Kommafehlers gar nicht erst startet, waere die schlechtere Loesung - und
+    das Programm kommt mit fehlenden Angaben ohnehin zurecht.
+    """
+    beanstandungen = []
+
+    _, fehler = pruefe_raumname(conf.get('ROOM_NAME'))
+    if fehler:
+        beanstandungen.append(f"ROOM_NAME: {fehler}")
+
+    if 'SCHEDULE' not in conf:
+        beanstandungen.append(
+            "SCHEDULE fehlt - Stundennamen und Pausen bleiben leer.")
+    else:
+        _, fehler = pruefe_stundenplan(conf.get('SCHEDULE'))
+        if fehler:
+            beanstandungen.append(f"SCHEDULE: {fehler}")
+
+    return beanstandungen
+
+
+def melde_konfigurationsfehler(conf: Dict[str, Any]) -> None:
+    """Schreibt die Beanstandungen aus pruefe_konfiguration() ins Protokoll."""
+    for hinweis in pruefe_konfiguration(conf):
+        logging.warning(f"config.json: {hinweis}")
 
 
 def formatiere_dauer(sekunden: float) -> str:

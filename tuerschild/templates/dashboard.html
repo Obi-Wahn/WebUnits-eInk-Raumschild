@@ -34,11 +34,6 @@
         .form-group { margin-bottom: 20px; }
         label { display: block; font-size: 10px; font-weight: 800; color: #94a3b8; text-transform: uppercase; margin-bottom: 5px; }
         input { width: 100%; box-sizing: border-box; background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 12px; border-radius: 10px; font-size: 14px; font-weight: 600; outline: none; }
-        textarea { width: 100%; box-sizing: border-box; background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 12px; border-radius: 10px; font-size: 13px; outline: none; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; line-height: 1.45; resize: vertical; }
-        details { margin-bottom: 20px; }
-        summary { cursor: pointer; font-size: 10px; font-weight: 800; color: #94a3b8; text-transform: uppercase; margin-bottom: 8px; }
-        summary:hover { color: #64748b; }
-        .hint { font-size: 11px; color: #94a3b8; line-height: 1.5; margin: 8px 0 0; font-weight: 600; }
         
         .lesson-block { background: #f8fafc; border-radius: 10px; padding: 15px; margin-top: 10px; border: 1px solid #e2e8f0; }
         .empty-state { text-align: center; color: #94a3b8; font-size: 13px; padding: 20px; background: #f8fafc; border-radius: 10px; margin-top: 10px; font-weight: bold; }
@@ -138,24 +133,6 @@
                             <label>Intervall (Sekunden, mind. {{ min_interval }})</label>
                             <input type="number" name="AUTO_UPDATE_SECONDS" value="{{ conf.get('AUTO_UPDATE_SECONDS', 900) }}" min="{{ min_interval }}" max="{{ max_interval }}">
                         </div>
-
-                        {# Eingeklappt, weil der Stundenplan selten geaendert wird und das
-                           Textfeld sonst die ganze Spalte einnimmt. <details> ist reines
-                           HTML - das Projekt kommt bewusst ohne JavaScript aus. #}
-                        <details>
-                            <summary>Stundenplan bearbeiten</summary>
-                            <textarea name="SCHEDULE" rows="20" spellcheck="false" wrap="off">{{ schedule_text }}</textarea>
-                            <p class="hint">
-                                Alle Uhrzeiten im Format HH:MM. <strong>DAY_START</strong> und
-                                <strong>DAY_END</strong> begrenzen den Schultag,
-                                <strong>LESSONS</strong> sind die Unterrichtsstunden,
-                                <strong>BREAKS</strong> die Pausen. Die Startzeit einer Stunde
-                                muss auf die Minute mit WebUntis übereinstimmen &ndash; nur
-                                darüber findet das Schild den Stundennamen.
-                                Wird etwas nicht angenommen, bleibt der eingegebene Text
-                                erhalten und oben steht, woran es lag.
-                            </p>
-                        </details>
 
                         <button type="submit" class="btn btn-save">Speichern</button>
                     </form>

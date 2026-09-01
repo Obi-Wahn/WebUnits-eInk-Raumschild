@@ -40,10 +40,10 @@ from .konstanten import (BACKGROUND_ERROR_PAUSE, DEFAULT_UPDATE_SECONDS,
                          UI_HEADER_HEIGHT, UI_HEIGHT, UI_LINE_Y, UI_MARGIN,
                          UI_WIDTH, WAVESHARE_LIB)
 from .zustand import AppState, Lesson, TimedLesson, app_state
-from .konfiguration import (CONFIG_FILE, formatiere_dauer,
-                            formatiere_stundenplan, get_cached_config, get_now,
-                            get_update_interval, pruefe_raumname,
-                            pruefe_stundenplan, save_config)
+from .konfiguration import (CONFIG_FILE, formatiere_dauer, get_cached_config,
+                            get_now, get_update_interval,
+                            melde_konfigurationsfehler, pruefe_konfiguration,
+                            pruefe_raumname, pruefe_stundenplan, save_config)
 from .hardware import (check_touch_via_i2c, clear_display_once,
                        clear_touch_interrupt_via_i2c, init_fonts)
 from .anzeige import (build_detail_line, draw_lesson_block, get_text_width,

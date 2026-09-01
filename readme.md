@@ -14,7 +14,7 @@ Dieses Projekt stellt ein automatisiertes, digitales Türschild für den Einsatz
 * **Responsives & Sicheres Administrations-Interface:** Die Verwaltung erfolgt über ein lokales Web-Interface. Dank modernem **CSS-Grid** und **Mobile-First-Ansatz** passt sich das Layout perfekt an: Auf dem Smartphone fließen die Bedienelemente logisch untereinander, auf einem Desktop-Monitor entfaltet sich ein Zwei-Spalten-Cockpit. Abgesichert ist das Ganze durch Nginx als Reverse Proxy (HTTPS/SSL) sowie HTTP Basic Authentication.
 * **Sichere Systemsteuerung & Architektur:** Über das Web-Interface lässt sich der Raspberry Pi per Knopfdruck sicher neu starten oder herunterfahren. Zustandsändernde Aktionen sind durch POST-Requests (CSRF-Schutz) gesichert. Schreibvorgänge in die Konfigurationsdatei erfolgen atomar, um Datenkorruption bei plötzlichem Stromausfall zu vermeiden.
 * **Integrierte Diagnose:** Ein implementierter Testlauf ermöglicht die Überprüfung aller Display-Zustände und Fehlermeldungen direkt über das Web-Interface.
-* **Stundenplan im Web-Interface pflegbar:** Unterrichts- und Pausenzeiten lassen sich direkt im Browser bearbeiten; ein SSH-Zugang ist dafür nicht mehr nötig. Jede Uhrzeit wird beim Speichern geprüft und einheitlich als `HH:MM` abgelegt — eine fehlerhafte Eingabe wird abgelehnt, der eingegebene Text bleibt erhalten, und die Meldung nennt den betroffenen Eintrag. Angenommen wird nur ein vollständig gültiges Formular, damit nie ein halb übernommener Stand in der Konfiguration steht.
+* **Geprüfte Konfiguration:** Beim Einlesen der `config.json` wird gemeldet, was am Raumnamen und am Stundenplan nicht stimmt — mit Angabe des betroffenen Eintrags. Diese Fehler äußern sich sonst nicht als Fehlermeldung, sondern als stille Unauffälligkeit: `"8:00"` statt `"08:00"` lässt den Stundennamen einfach leer, ein leerer Raumname erzeugt ein „Raum None fehlt." ohne erkennbaren Grund. Gewarnt wird nur, abgelehnt nichts — ein Türschild, das wegen eines Kommafehlers gar nicht erst startet, wäre die schlechtere Lösung.
 * **Meldung bei anhaltender Störung:** Ein kurzer Ausfall bleibt eine Randnotiz — die Offline-Rücklage trägt ihn. Dauert er länger als drei Stunden, wird daraus eine Fehlermeldung im Systemprotokoll und ein roter Hinweis samt Dauer im Web-Interface. Ohne diese Eskalation sähe das Schild weiterhin völlig gesund aus: Es zeigt ja einen plausiblen Plan, nur eben einen, in dem seit Stunden keine Vertretung mehr nachgetragen wurde.
 
 ## **🛠️ Hardware-Voraussetzungen**
@@ -91,6 +91,17 @@ Das Programm erfordert eine Konfigurationsdatei namens `config.json` im Hauptver
 }
 ```
 
+`SCHEDULE` enthält **keine Plandaten.** Der Unterricht kommt ausschließlich aus WebUntis, und dieses Gerät schreibt dorthin nie zurück. Hier steht nur, wie das Schild die Zeiten des Hauses benennt: dass `"08:00"` die *1. Std.* ist und dass zwischen 13:20 und 13:55 „Mittagspause" statt „Raum ist frei" angezeigt wird. Diese Werte werden bei der Einrichtung einmal eingetragen und danach kaum wieder angefasst; das Web-Interface bearbeitet sie deshalb bewusst nicht — es bleibt Steuerung und Anzeige.
+
+Damit ein Tippfehler in dieser Datei nicht unbemerkt bleibt, wird sie beim Einlesen geprüft. Ein Fehler landet als Warnung im Protokoll (`journalctl -u raumanzeige`), etwa:
+
+```
+WARNING - config.json: SCHEDULE: LESSONS, Eintrag 3 (start): '9:55' muss
+zweistellig geschrieben werden ('09:55') - sonst bleibt der Stundenname leer.
+```
+
+Das ist der häufigste Fehler und zugleich der am schwersten zu findende: Die Startzeit aus WebUntis ist immer zweistellig, und da das Programm Uhrzeiten als Zeichenketten vergleicht, trifft `"9:55"` schlicht auf nichts. Das Display zeigt dann alles Übrige normal an, nur der Stundenname bleibt leer.
+
 ### **🔒 Wichtige Hinweise zu Datenschutz und Sicherheit**
 
 1. **Principle of Least Privilege (PoLP):** Der Webserver läuft aus Sicherheitsgründen als eingeschränkter Standardnutzer (pi) und nicht als root. Für systemkritische Befehle (Reboot/Shutdown) wird dem Nutzer über die /etc/sudoers punktuell eine isolierte Ausnahmegenehmigung erteilt.  
@@ -139,7 +150,7 @@ Zwei Schalter für Sonderfälle: `--ohne-tests` und `--ohne-neustart`.
 
 ## **🧪 Tests**
 
-Das Projekt bringt eine automatisierte Testsuite mit. Sie prüft die Logik des Programms — Stundenauswahl, Offline-Rücklage, Textlayout, Konfigurationsgrenzen, die Prüfung der Formulareingaben, die Meldung bei anhaltenden Störungen sowie Anmeldung und CSRF-Schutz des Web-Interfaces.
+Das Projekt bringt eine automatisierte Testsuite mit. Sie prüft die Logik des Programms — Stundenauswahl, Offline-Rücklage, Textlayout, Konfigurationsgrenzen und deren Prüfung, die Meldung bei anhaltenden Störungen sowie Anmeldung und CSRF-Schutz des Web-Interfaces.
 
 **Ausführen auf dem Raspberry Pi:**
 
