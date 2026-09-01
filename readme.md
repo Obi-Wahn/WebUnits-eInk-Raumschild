@@ -66,6 +66,8 @@ Das Programm erfordert eine Konfigurationsdatei namens `config.json` im Hauptver
     "ADMIN_USER": "admin",
     "ADMIN_PASS": "passwort",
     "ROOM_NAME": "Raum101",
+    "WEB_HOST": "127.0.0.1",
+    "WEB_PUBLIC_URL": "",
     "AUTO_UPDATE_SECONDS": 900,
     "DISPLAY_ACTIVE": true,
     "TOUCH_ACTIVE": true,
@@ -90,6 +92,8 @@ Das Programm erfordert eine Konfigurationsdatei namens `config.json` im Hauptver
     }
 }
 ```
+
+`WEB_HOST` legt fest, worauf der Webserver lauscht — voreingestellt nur auf dem Raspberry Pi selbst, weil der Zugriff von außen über den Reverse Proxy läuft. `WEB_PUBLIC_URL` überschreibt die Adresse, die beim Start ins Protokoll geschrieben wird; leer bedeutet, dass sie aus der Netzwerkadresse des Geräts gebildet wird. Beides ist in der [Installationsanleitung](./Installationsanleitung.md), Schritt 7, näher beschrieben.
 
 `SCHEDULE` enthält **keine Plandaten.** Der Unterricht kommt ausschließlich aus WebUntis, und dieses Gerät schreibt dorthin nie zurück. Hier steht nur, wie das Schild die Zeiten des Hauses benennt: dass `"08:00"` die *1. Std.* ist und dass zwischen 13:20 und 13:55 „Mittagspause" statt „Raum ist frei" angezeigt wird. Diese Werte werden bei der Einrichtung einmal eingetragen und danach kaum wieder angefasst; das Web-Interface bearbeitet sie deshalb bewusst nicht — es bleibt Steuerung und Anzeige.
 
