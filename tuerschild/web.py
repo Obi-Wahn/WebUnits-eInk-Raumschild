@@ -22,7 +22,7 @@ from markupsafe import Markup, escape
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from .konfiguration import (formatiere_dauer, get_cached_config, get_now,
-                            pruefe_raumname, save_config)
+                            get_update_interval, pruefe_raumname, save_config)
 from .konstanten import (DEFAULT_UPDATE_SECONDS, FAILED_LOGIN_MAX,
                          FAILED_LOGIN_TTL, LOGIN_LOCKOUT_SECONDS,
                          MAX_LOGIN_ATTEMPTS, MAX_UPDATE_SECONDS,
@@ -293,6 +293,10 @@ def index():
         save_error=save_error,
         save_ok=save_ok,
         room_max=ROOM_NAME_MAX_LEN,
+        # Das TATSAECHLICH benutzte Intervall, nicht der rohe Wert aus der
+        # Datei: get_update_interval() begrenzt ihn. Wer von Hand 30 einträgt,
+        # sieht im Formular 30 - gearbeitet wird aber mit 300.
+        update_interval=get_update_interval(conf),
         min_interval=MIN_UPDATE_SECONDS,
         max_interval=MAX_UPDATE_SECONDS
     )

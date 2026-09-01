@@ -165,7 +165,9 @@ def test_kurze_stoerung_erscheint_als_gelber_hinweis(webclient):
     seite = client.get("/", headers=kopf).get_data(as_text=True)
 
     assert "nicht erreichbar" in seite
-    assert "warn-msg" in seite
+    # Auf das ATTRIBUT pruefen, nicht auf den blossen Klassennamen: Der steht
+    # ohnehin im Stylesheet der Seite, die Bedingung waere immer erfuellt.
+    assert 'class="warn-msg"' in seite
     assert "Netzwerkverbindung" not in seite
 
 
@@ -176,7 +178,7 @@ def test_lange_stoerung_erscheint_als_rote_meldung(webclient):
 
     seite = client.get("/", headers=kopf).get_data(as_text=True)
 
-    assert "error-msg" in seite
+    assert 'class="error-msg"' in seite
     assert "3 Std." in seite, "Die Dauer muss auf der Seite stehen"
     assert "prüfen" in seite
 
