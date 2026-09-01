@@ -50,7 +50,7 @@ def test_die_schalter_sind_nicht_rot(webclient):
     Rot gehoert dort nicht hin - es stumpft ab, wo es wirklich gebraucht wird.
     """
     inhalt = seite(webclient)
-    assert 'class="btn btn-schalter"' in inhalt
+    assert 'class="btn btn-neutral"' in inhalt
     assert 'class="btn btn-off"' not in inhalt
     assert 'class="btn btn-on"' not in inhalt
 
@@ -180,3 +180,87 @@ def test_die_uebersicht_ist_bei_gutem_stand_unauffaellig(webclient):
     inhalt = seite(webclient)
     assert "aktuell" in inhalt
     assert "Echtzeit" in inhalt
+
+
+# ==============================================================================
+# Ein Farbsystem statt sieben Einzelfarben
+# ==============================================================================
+# Vorher hatte jeder Knopf seine eigene Farbe, zusammengesucht aus zwei
+# Systemen: #007BFF, #6f42c1, #DC3545 und #28A745 stammen aus Bootstrap, der
+# Rest aus der Slate-Palette der uebrigen Seite. Aus der Farbe eines Knopfes
+# liess sich nichts ableiten - sie war Dekoration.
+#
+# Jetzt gibt es vier Rollen. Diese Tests halten sie fest, denn eine achte Farbe
+# schleicht sich beim naechsten neuen Knopf muehelos wieder ein, und niemandem
+# faellt es einzeln auf.
+ROLLENFARBEN = {
+    "0f172a",   # btn-haupt    Hauptaktion des Abschnitts
+    "475569",   # btn-neutral  harmlos, jederzeit umkehrbar
+    "f59e0b",   # btn-test     greift sichtbar ein, aber voruebergehend
+    "dc2626",   # btn-gefahr   beendet den Betrieb
+}
+
+
+def test_die_knoepfe_benutzen_nur_die_vier_rollenfarben():
+    gefunden = set(re.findall(r"\.btn-[a-z-]+ \{[^}]*background-color: #([0-9a-fA-F]{6})",
+                              vorlage()))
+    ueberzaehlig = {f.lower() for f in gefunden} - ROLLENFARBEN
+    assert not ueberzaehlig, (
+        f"Neue Knopffarben ausserhalb der vier Rollen: {sorted(ueberzaehlig)}"
+    )
+
+
+def test_jede_rolle_wird_auch_benutzt(webclient):
+    """
+    Gegenprobe. Ohne sie waere der Test darueber auch dann gruen, wenn die
+    Rollen zwar definiert, im Markup aber gar nicht mehr vergeben sind.
+
+    Geprueft wird auf das ATTRIBUT, nicht auf den blossen Klassennamen: Der
+    steht ohnehin im Stylesheet der Seite, die Bedingung waere immer erfuellt.
+    Genau daran ist eine erste Fassung dieses Tests gescheitert - sie blieb
+    gruen, obwohl im Markup keine einzige Schaltflaeche die Rolle mehr trug.
+    """
+    inhalt = seite(webclient)
+    for rolle in ("btn-haupt", "btn-neutral", "btn-test", "btn-gefahr"):
+        assert f'class="btn {rolle}"' in inhalt, (
+            f"Die Rolle {rolle} wird auf der Seite nicht mehr vergeben"
+        )
+
+
+def test_kein_knopf_traegt_seine_farbe_im_markup():
+    """
+    So sind die Sonderfarben ueberhaupt entstanden: ein style-Attribut am
+    einzelnen Knopf, an der zentralen Palette vorbei.
+    """
+    treffer = re.findall(r'class="btn[^"]*"[^>]*style="[^"]*background', vorlage())
+    assert not treffer, f"Farbe direkt am Knopf statt ueber eine Rolle: {treffer}"
+
+
+# ==============================================================================
+# Massstab am Rechner
+# ==============================================================================
+def desktop_block():
+    """Der Inhalt der @media-Regel ab 800 Pixel Breite."""
+    treffer = re.search(r"@media \(min-width: 800px\) \{(.*?)\n        \}",
+                        vorlage(), re.DOTALL)
+    assert treffer, "Die Regel fuer breite Bildschirme ist verschwunden"
+    return treffer.group(1)
+
+
+def test_die_knoepfe_sind_am_rechner_kleiner():
+    """
+    Die Grundmasse sind fuers Telefon gemacht - 15 Pixel Innenabstand treffen
+    dort den Daumen. Am Rechner wirkt dieselbe Schaltflaeche wie eine
+    vergroesserte App, und die Seite wird unnoetig lang.
+
+    Faellt diese Regel weg, merkt es auf dem Telefon niemand.
+    """
+    grund = re.search(r"\n        \.btn \{[^}]*padding: (\d+)px", vorlage())
+    schmal = re.search(r"\.btn \{[^}]*padding: (\d+)px", desktop_block())
+
+    assert grund, "Der Grundabstand der Knoepfe ist nicht mehr auffindbar"
+    assert schmal, "Am Rechner gilt kein eigener Abstand mehr"
+    assert int(schmal.group(1)) < int(grund.group(1)), (
+        f"Am Rechner sind die Knoepfe nicht kleiner "
+        f"({schmal.group(1)}px gegen {grund.group(1)}px)"
+    )
