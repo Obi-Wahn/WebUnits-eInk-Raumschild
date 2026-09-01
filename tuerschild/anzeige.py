@@ -19,7 +19,7 @@ from . import hardware
 from .hardware import init_fonts
 from .konfiguration import get_now
 from .konstanten import (STATUS_LABELS, UI_BADGE_GAP, UI_BADGE_PADDING,
-                         UI_ELLIPSIS, UI_HEADER_HEIGHT, UI_LINE_Y,
+                         UI_ELLIPSIS, UI_HEADER_HEIGHT, UI_HEIGHT, UI_LINE_Y,
                          UI_MARGIN, UI_WIDTH)
 from .zustand import Lesson, app_state
 
@@ -146,92 +146,115 @@ def draw_lesson_block(draw: ImageDraw.ImageDraw, lesson: Lesson, y_offset: int, 
     detail_str = build_detail_line(draw, lesson, f_small, UI_WIDTH - 2 * UI_MARGIN)
     draw.text((UI_MARGIN, y_details), detail_str, font=f_small, fill=0)
 
-def update_display_logic(data: Optional[Dict[str, Optional[Lesson]]], message: str, conf: Dict[str, Any], stale: bool = False) -> None:
+def zeichne_anzeige(data: Optional[Dict[str, Optional[Lesson]]], message: str, conf: Dict[str, Any], stale: bool = False) -> Image.Image:
     """
-    Erstellt ein 1-Bit (Schwarz/Weiß) Bitmap-Bild des Stundenplans und sendet
-    es an den Hardware-Controller des Waveshare E-Paper-Displays.
+    Zeichnet das Bild, das auf dem E-Paper steht - und nur das. Es wird hier
+    weder Hardware angesprochen noch etwas gesendet.
+
+    WARUM DAS VOM SENDEN GETRENNT IST:
+    Das Web-Interface zeigt eine Vorschau der aktuellen Anzeige. Frueher war
+    das eine freie Nachbildung in HTML: aehnlich, aber eben nicht dasselbe -
+    zwei Fassungen desselben Layouts, die zwangslaeufig auseinanderlaufen. Vor
+    allem zeigte die Nachbildung nicht, was auf 250x122 Pixeln tatsaechlich
+    Platz hat; gerade die Kuerzungen sah man dort nie.
+    Seit das Zeichnen fuer sich steht, benutzt die Vorschau genau diese
+    Funktion und zeigt Pixel fuer Pixel dasselbe Bild wie das Schild.
 
     'stale' markiert Daten, die aus der Offline-Rücklage stammen (WebUntis war
     nicht erreichbar). In dem Fall setzen wir ein kleines Ausrufezeichen in die
     Kopfzeile: Der Plan stimmt sehr wahrscheinlich noch, könnte aber eine
     kurzfristige Änderung von heute nicht enthalten.
     """
-    if app_state.shutdown_event.is_set(): return 
-    message = message or "" 
+    message = message or ""
 
-    if hardware.epd2in13_V3 is None: 
-        logging.info(f"Display-Update (Simulation): {message}")
+    # Die Maße kommen aus den Konstanten, nicht vom Treiber. Das gesamte
+    # Layout darunter rechnet ohnehin mit UI_WIDTH und UI_HEIGHT; ein Bild in
+    # Treibergröße zu erzeugen und dann in fester Größe zu bemalen, wäre nur
+    # scheinbar allgemeiner. So lässt sich außerdem ohne Display zeichnen.
+    image = Image.new('1', (UI_WIDTH, UI_HEIGHT), 255)
+    draw = ImageDraw.Draw(image)
+
+    init_fonts()
+    f_mega = app_state.global_fonts['mega']
+    f_large = app_state.global_fonts['large']
+    f_med = app_state.global_fonts['med']
+    f_reg = app_state.global_fonts['reg']
+    f_small = app_state.global_fonts['small']
+
+    now = get_now()
+
+    # --- KOPFZEILE ---
+    draw.rectangle((0, 0, UI_WIDTH, UI_HEADER_HEIGHT), fill=0)
+    draw.text((UI_MARGIN, 3), conf.get('ROOM_NAME', 'Unbekannt'), font=f_med, fill=255)
+    time_str = now.strftime("%d.%m.%Y %H:%M")
+    draw.text((120, 5), time_str, font=f_small, fill=255)
+
+    # Offline-Hinweis: invertiertes Ausrufezeichen ganz rechts in der Kopfzeile.
+    # Bewusst sehr klein gehalten - auf 250x122 Pixeln ist jeder Pixel knapp,
+    # und der Stundenplan selbst bleibt die wichtigere Information.
+    if stale:
+        draw.rectangle((UI_WIDTH - 13, 4, UI_WIDTH - 3, UI_HEADER_HEIGHT - 5), fill=255)
+        draw.text((UI_WIDTH - 10, 4), "!", font=f_small, fill=0)
+
+    # --- HAUPTBEREICH (Unterricht) ---
+    if data and (data.get('current') or data.get('next')):
+        curr_lesson = data.get('current')
+        next_lesson = data.get('next')
+
+        if curr_lesson:
+            draw_lesson_block(draw, curr_lesson, 30, "JETZT:", f_small, f_reg, f_med)
+        else:
+            draw.text((UI_MARGIN, 35), message, font=f_large, fill=0)
+
+        draw.line((UI_MARGIN, UI_LINE_Y, UI_WIDTH - UI_MARGIN, UI_LINE_Y), fill=0, width=1)
+
+        if next_lesson:
+            draw_lesson_block(draw, next_lesson, 74, "DANACH:", f_small, f_reg, f_med)
+        else:
+            msg_text = "Kein Unterricht mehr heute." if "Unterrichtsende" not in message else "Bis morgen!"
+            draw.text((UI_MARGIN, 74), "DANACH:", font=f_small, fill=0)
+            draw.text((UI_MARGIN, 90), msg_text, font=f_reg, fill=0)
+
+    # --- HAUPTBEREICH (Freistunde / Ferien) ---
+    else:
+        # Wir handhaben mehrzeilige Strings (\n), damit lange Texte 
+        # (wie "Unterrichtsfrei!\n(Ferienzeit)") sauber und mittig auf 
+        # das schmale Display passen.
+        if "\n" in message:
+            lines = message.split("\n")
+            y_pos = 45
+            for line in lines:
+                text_w = get_text_width(draw, line, f_mega)
+                x_pos = (UI_WIDTH - text_w) / 2 if text_w < UI_WIDTH else 2
+                draw.text((x_pos, y_pos), line, font=f_mega, fill=0)
+                y_pos += 24 
+        else:
+            text_w = get_text_width(draw, message, f_mega)
+            x_pos = (UI_WIDTH - text_w) / 2 if text_w < UI_WIDTH else 2
+            draw.text((x_pos, 60), message, font=f_mega, fill=0)
+
+    return image
+
+
+def update_display_logic(data: Optional[Dict[str, Optional[Lesson]]], message: str, conf: Dict[str, Any], stale: bool = False) -> None:
+    """
+    Zeichnet die Anzeige und überträgt sie an den Waveshare-Controller.
+    Das Zeichnen selbst steht in zeichne_anzeige().
+    """
+    if app_state.shutdown_event.is_set(): return
+
+    if hardware.epd2in13_V3 is None:
+        logging.info(f"Display-Update (Simulation): {message or ''}")
         return
-        
-    # Thread-Lock: Garantiert, dass wir das Display nicht versehentlich 
+
+    # Thread-Lock: Garantiert, dass wir das Display nicht versehentlich
     # von zwei Threads gleichzeitig flashen (SPI-Kollision).
-    with app_state.display_lock: 
-        try: 
+    with app_state.display_lock:
+        try:
             epd = hardware.epd2in13_V3.EPD()
             epd.init()
-            
-            # Neues, komplett weißes Bild (255) erzeugen
-            image = Image.new('1', (epd.height, epd.width), 255) 
-            draw = ImageDraw.Draw(image) 
-            
-            init_fonts()
-            f_mega = app_state.global_fonts['mega']
-            f_large = app_state.global_fonts['large']
-            f_med = app_state.global_fonts['med']
-            f_reg = app_state.global_fonts['reg']
-            f_small = app_state.global_fonts['small']
 
-            now = get_now()
-            
-            # --- KOPFZEILE ---
-            draw.rectangle((0, 0, UI_WIDTH, UI_HEADER_HEIGHT), fill=0)
-            draw.text((UI_MARGIN, 3), conf.get('ROOM_NAME', 'Unbekannt'), font=f_med, fill=255)
-            time_str = now.strftime("%d.%m.%Y %H:%M")
-            draw.text((120, 5), time_str, font=f_small, fill=255)
-
-            # Offline-Hinweis: invertiertes Ausrufezeichen ganz rechts in der Kopfzeile.
-            # Bewusst sehr klein gehalten - auf 250x122 Pixeln ist jeder Pixel knapp,
-            # und der Stundenplan selbst bleibt die wichtigere Information.
-            if stale:
-                draw.rectangle((UI_WIDTH - 13, 4, UI_WIDTH - 3, UI_HEADER_HEIGHT - 5), fill=255)
-                draw.text((UI_WIDTH - 10, 4), "!", font=f_small, fill=0)
-
-            # --- HAUPTBEREICH (Unterricht) ---
-            if data and (data.get('current') or data.get('next')):
-                curr_lesson = data.get('current')
-                next_lesson = data.get('next')
-                
-                if curr_lesson:
-                    draw_lesson_block(draw, curr_lesson, 30, "JETZT:", f_small, f_reg, f_med)
-                else:
-                    draw.text((UI_MARGIN, 35), message, font=f_large, fill=0)
-                
-                draw.line((UI_MARGIN, UI_LINE_Y, UI_WIDTH - UI_MARGIN, UI_LINE_Y), fill=0, width=1)
-                
-                if next_lesson:
-                    draw_lesson_block(draw, next_lesson, 74, "DANACH:", f_small, f_reg, f_med)
-                else:
-                    msg_text = "Kein Unterricht mehr heute." if "Unterrichtsende" not in message else "Bis morgen!"
-                    draw.text((UI_MARGIN, 74), "DANACH:", font=f_small, fill=0)
-                    draw.text((UI_MARGIN, 90), msg_text, font=f_reg, fill=0)
-            
-            # --- HAUPTBEREICH (Freistunde / Ferien) ---
-            else:
-                # Wir handhaben mehrzeilige Strings (\n), damit lange Texte 
-                # (wie "Unterrichtsfrei!\n(Ferienzeit)") sauber und mittig auf 
-                # das schmale Display passen.
-                if "\n" in message:
-                    lines = message.split("\n")
-                    y_pos = 45
-                    for line in lines:
-                        text_w = get_text_width(draw, line, f_mega)
-                        x_pos = (UI_WIDTH - text_w) / 2 if text_w < UI_WIDTH else 2
-                        draw.text((x_pos, y_pos), line, font=f_mega, fill=0)
-                        y_pos += 24 
-                else:
-                    text_w = get_text_width(draw, message, f_mega)
-                    x_pos = (UI_WIDTH - text_w) / 2 if text_w < UI_WIDTH else 2
-                    draw.text((x_pos, 60), message, font=f_mega, fill=0)
+            image = zeichne_anzeige(data, message, conf, stale)
 
             # Das fertige Bitmap an den Hardware-Controller übertragen
             epd.display(epd.getbuffer(image))

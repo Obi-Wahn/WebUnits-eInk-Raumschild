@@ -7,6 +7,7 @@ standardmaessig nur auf dem Localhost; der Zugriff von aussen laeuft ueber einen
 Reverse Proxy (siehe Installationsanleitung).
 """
 import datetime
+import io
 import ipaddress
 import logging
 import secrets
@@ -18,9 +19,9 @@ from functools import wraps
 from typing import Optional
 
 from flask import Flask, abort, redirect, render_template, request, Response
-from markupsafe import Markup, escape
 from werkzeug.security import check_password_hash, generate_password_hash
 
+from .anzeige import zeichne_anzeige
 from .konfiguration import (formatiere_dauer, get_cached_config, get_now,
                             get_update_interval, pruefe_raumname, save_config)
 from .konstanten import (DEFAULT_UPDATE_SECONDS, FAILED_LOGIN_MAX,
@@ -269,20 +270,13 @@ def index():
         stoerung_lang = sekunden >= STALE_ALERT_SECONDS
 
 
-    # PÄDAGOGISCHER HINTERGRUND (Sicherheit gegen XSS):
-    # Um zu verhindern, dass externe API-Daten schadhaften HTML-Code in unser
-    # Dashboard einschleusen (Cross-Site Scripting), escapen wir den Text zuerst.
-    # Erst DANACH ersetzen wir die reinen Zeilenumbrüche (\n) durch HTML-Breaks (<br>), 
-    # damit lange Feriennamen im Browser schön dargestellt werden.
-    d_msg_safe = Markup(escape(d_msg_raw)).replace('\n', Markup('<br>'))
-        
     display_time = get_now().strftime("%d.%m.%Y %H:%M:%S")
 
     return render_template(
         DASHBOARD_VORLAGE,
         conf=conf, 
         data=d_data, 
-        msg=d_msg_safe, 
+        beschreibung=vorschau_beschreibung(d_data, d_msg_raw),
         now=display_time,
         sim_active=is_simulated,
         csrf_token=c_token,
@@ -300,6 +294,73 @@ def index():
         min_interval=MIN_UPDATE_SECONDS,
         max_interval=MAX_UPDATE_SECONDS
     )
+
+def vorschau_beschreibung(data, meldung: str) -> str:
+    """
+    Beschreibt in Worten, was auf dem Display steht.
+
+    Die Vorschau ist ein Bild - fuer eine Vorlesesoftware also stumm, und auch
+    mit den Augen ist ein 250x122-Bitmap muehsam zu lesen. Diese Beschreibung
+    steht im alt-Attribut und macht den Inhalt wieder zu Text.
+
+    Der Text stammt teils aus WebUntis. Er wird hier NICHT zu HTML
+    zusammengesetzt, sondern als reine Zeichenkette zurueckgegeben; Jinja
+    maskiert ihn beim Einsetzen ins Attribut. Fruehere Fassungen dieser Seite
+    bauten aus der Meldung HTML mit <br> - das musste eigens gegen
+    eingeschleusten Code abgesichert werden.
+    """
+    def stunde(lesson):
+        teile = [lesson.stunde, lesson.zeit,
+                 lesson.fach_lang or lesson.fach, lesson.klasse]
+        if lesson.lehrer:
+            teile.append(lesson.lehrer)
+        if lesson.status_code == "cancelled":
+            teile.append("fällt aus")
+        elif lesson.status_code == "irregular":
+            teile.append("Vertretung")
+        return ", ".join(t for t in teile if t)
+
+    if isinstance(data, dict) and (data.get("current") or data.get("next")):
+        zeilen = []
+        zeilen.append("Jetzt: " + stunde(data["current"]) if data.get("current")
+                      else "Jetzt: " + (meldung or "kein Unterricht"))
+        zeilen.append("Danach: " + stunde(data["next"]) if data.get("next")
+                      else "Danach: kein Unterricht mehr heute")
+        return " | ".join(zeilen)
+
+    return (meldung or "").replace("\n", " ") or "keine Anzeige"
+
+@app.route('/vorschau.png')
+@requires_auth
+def vorschau():
+    """
+    Liefert das Bild, das gerade auf dem E-Paper steht - als PNG.
+
+    KEINE NACHBILDUNG, SONDERN DASSELBE BILD:
+    Gezeichnet wird mit zeichne_anzeige(), also mit genau der Funktion, die
+    auch das Display bemalt. Frueher stand hier eine Nachbildung in HTML.
+    Die sah aehnlich aus, war aber eine zweite Fassung desselben Layouts - und
+    sie zeigte vor allem nicht, was auf 250x122 Pixeln wirklich Platz hat.
+    Gerade die Kuerzungen langer Fachnamen sah man dort nie.
+
+    Die Hardware wird dabei nicht angefasst: Es wird nur gezeichnet, nichts
+    gesendet. Der Aufruf ist also auch bei arbeitendem Tuerschild harmlos.
+    """
+    conf = get_cached_config()
+    with app_state.state_lock:
+        data = app_state.current_display_data
+        meldung = app_state.current_display_msg
+        stale = app_state.data_is_stale
+
+    bild = zeichne_anzeige(data, meldung, conf, stale=stale)
+
+    puffer = io.BytesIO()
+    bild.save(puffer, format="PNG")
+
+    antwort = Response(puffer.getvalue(), mimetype="image/png")
+    # Ohne das zeigte der Browser nach einem Update weiter das alte Bild.
+    antwort.headers["Cache-Control"] = "no-store, must-revalidate"
+    return antwort
 
 @app.route('/simulate_time', methods=['POST'])
 @requires_auth
