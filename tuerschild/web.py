@@ -17,15 +17,18 @@ import time
 from functools import wraps
 from typing import Optional
 
-from flask import Flask, abort, redirect, render_template_string, request, Response
+from flask import Flask, abort, redirect, render_template, request, Response
 from markupsafe import Markup, escape
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from .konfiguration import get_cached_config, get_now, save_config
+from .konfiguration import (formatiere_dauer, formatiere_stundenplan,
+                            get_cached_config, get_now, pruefe_raumname,
+                            pruefe_stundenplan, save_config)
 from .konstanten import (DEFAULT_UPDATE_SECONDS, FAILED_LOGIN_MAX,
                          FAILED_LOGIN_TTL, LOGIN_LOCKOUT_SECONDS,
                          MAX_LOGIN_ATTEMPTS, MAX_UPDATE_SECONDS,
-                         MIN_UPDATE_SECONDS, TRUSTED_PROXIES)
+                         MIN_UPDATE_SECONDS, ROOM_NAME_MAX_LEN,
+                         STALE_ALERT_SECONDS, TRUSTED_PROXIES)
 from .steuerung import run_display_test_sequence
 from .zustand import app_state
 
@@ -208,245 +211,22 @@ def verify_csrf(f):
     return decorated
 
 # ------------------------------------------------------------------------------
-# HINWEIS ZUR PORTABILITÄT (HTML inline & CSS Grid):
-# Normalerweise gehört HTML in /templates. Da dieses Skript aber oft per 
-# Copy&Paste installiert wird, bleibt alles in einer Datei (Zero-Config-Ansatz).
-# Das Layout nutzt CSS Grid und einen Mobile-First Ansatz (Flexbox column), 
-# damit es sich auf Smartphones und Desktop-PCs automatisch perfekt anordnet.
+# DIE HTML-VORLAGE
 # ------------------------------------------------------------------------------
-HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="de">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Türschild-Admin</title>
-    <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f1f5f9; color: #1e293b; margin: 0; padding: 15px; display: flex; justify-content: center; }
-        .card { background: white; max-width: 950px; width: 100%; border-radius: 20px; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1); overflow: hidden; margin-top: 10px; margin-bottom: 20px; }
-        
-        .header { background-color: #0f172a; color: white; padding: 30px; }
-        .header h1 { margin: 0; font-size: 24px; letter-spacing: -1px; text-transform: uppercase; }
-        .header p { margin: 5px 0 0; opacity: 0.6; font-size: 12px; font-weight: bold; }
-        .content { padding: 30px; }
-        
-        .dashboard-grid { display: flex; flex-direction: column; gap: 0; }
-        .col-preview { margin-top: 20px; margin-bottom: 20px; }
-        
-        .section-title { font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; margin: 30px 0 15px 0; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px; letter-spacing: 0.5px; }
-        .section-title:first-child { margin-top: 0; }
-        
-        form.inline-form { margin: 0; }
-        .btn-group { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; }
-        .btn-full { grid-column: span 2; }
-        .btn { width: 100%; box-sizing: border-box; display: block; text-decoration: none; text-align: center; padding: 15px; border-radius: 12px; font-weight: bold; color: white; transition: transform 0.1s; border: none; cursor: pointer; font-size: 14px;}
-        .btn:active { transform: scale(0.98); }
-        .btn-update { background-color: #007BFF; } 
-        .btn-demo { background-color: #6f42c1; } 
-        .btn-off { background-color: #DC3545; }    
-        .btn-on { background-color: #28A745; } 
-        .btn-test { background-color: #f59e0b; }    
-        .btn-save { background-color: #0f172a; width: 100%; font-size: 16px; margin-top: 5px; color: white; padding: 15px; border-radius: 12px; font-weight: bold; }
-        
-        .form-group { margin-bottom: 20px; }
-        label { display: block; font-size: 10px; font-weight: 800; color: #94a3b8; text-transform: uppercase; margin-bottom: 5px; }
-        input { width: 100%; box-sizing: border-box; background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 12px; border-radius: 10px; font-size: 14px; font-weight: 600; outline: none; }
-        
-        .lesson-block { background: #f8fafc; border-radius: 10px; padding: 15px; margin-top: 10px; border: 1px solid #e2e8f0; }
-        .empty-state { text-align: center; color: #94a3b8; font-size: 13px; padding: 20px; background: #f8fafc; border-radius: 10px; margin-top: 10px; font-weight: bold; }
-        .error-msg { background-color: #fee2e2; color: #dc2626; padding: 15px; border-radius: 10px; font-size: 13px; font-weight: bold; text-align: center; margin-bottom: 20px; }
-        .warn-msg { background-color: #fef3c7; color: #854d0e; padding: 15px; border-radius: 10px; font-size: 13px; font-weight: bold; text-align: center; margin-bottom: 20px; line-height: 1.5; }
-        .footer { text-align: center; font-size: 10px; color: #cbd5e1; margin-top: 35px; text-transform: uppercase; letter-spacing: 1px; }
-        
-        .tag-red { background-color: #fee2e2; color: #dc2626; padding: 4px 8px; border-radius: 5px; font-size: 11px; font-weight: bold; text-transform: uppercase; margin-bottom: 6px; display: inline-block;}
-        .tag-yellow { background-color: #fef08a; color: #854d0e; padding: 4px 8px; border-radius: 5px; font-size: 11px; font-weight: bold; text-transform: uppercase; margin-bottom: 6px; display: inline-block;}
-
-        @media (min-width: 800px) {
-            body { padding: 40px 20px; }
-            .card { margin-top: 0; }
-            .dashboard-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; align-items: start; }
-            .col-controls-top { grid-column: 1; grid-row: 1; }
-            .col-controls-bottom { grid-column: 1; grid-row: 2; }
-            .col-preview { grid-column: 2; grid-row: 1 / span 2; margin-top: 0; margin-bottom: 0; background-color: #f8fafc; padding: 25px; border-radius: 15px; border: 2px dashed #e2e8f0; }
-            .col-preview .section-title { margin-top: 0; }
-            .col-preview .lesson-block { background: white; }
-            .col-preview .empty-state { background: white; }
-        }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <div class="header">
-            <h1>Display-Control</h1>
-            <p>{{ conf.get('ROOM_NAME', 'Unbekannt') }} | Raumanzeige</p>
-        </div>
-        
-        <div class="content">
-            {% if conf|length == 0 %}
-                <div class="error-msg">Konfigurationsfehler! Die Datei 'config.json' konnte nicht gelesen werden.</div>
-            {% endif %}
-
-            {% if stale %}
-                <div class="warn-msg">
-                    WebUntis ist derzeit nicht erreichbar.<br>
-                    Angezeigt wird der zuletzt abgerufene Plan von heute &ndash; kurzfristige
-                    Aenderungen koennen darin fehlen.
-                    {% if last_sync %}<br>Letzter erfolgreicher Abruf: {{ last_sync }}{% endif %}
-                </div>
-            {% endif %}
-            
-            <div class="dashboard-grid">
-                
-                <div class="col-controls-top">
-                    <div class="section-title">Gerätesteuerung</div>
-                    <div class="btn-group">
-                        <form action="/update" method="POST" class="inline-form btn-full">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                            <button type="submit" class="btn btn-update">Manuelles Update</button>
-                        </form>
-                        
-                        <form action="/toggle" method="POST" class="inline-form">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                            <button type="submit" class="btn {% if conf.get('DISPLAY_ACTIVE', True) %}btn-off{% else %}btn-on{% endif %}">
-                                {% if conf.get('DISPLAY_ACTIVE', True) %}Display aus{% else %}Display an{% endif %}
-                            </button>
-                        </form>
-                        
-                        <form action="/toggle_touch" method="POST" class="inline-form">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                            <button type="submit" class="btn {% if conf.get('TOUCH_ACTIVE', True) %}btn-off{% else %}btn-on{% endif %}">
-                                {% if conf.get('TOUCH_ACTIVE', True) %}Touch aus{% else %}Touch an{% endif %}
-                            </button>
-                        </form>
-                    </div>
-                    
-                    <div class="section-title">Einstellungen</div>
-                    <form action="/save" method="POST">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                        <div class="form-group">
-                            <label>Anzeigeraum</label>
-                            <input type="text" name="ROOM_NAME" value="{{ conf.get('ROOM_NAME', '') }}">
-                        </div>
-                        <div class="form-group">
-                            <label>Intervall (Sekunden, mind. {{ min_interval }})</label>
-                            <input type="number" name="AUTO_UPDATE_SECONDS" value="{{ conf.get('AUTO_UPDATE_SECONDS', 900) }}" min="{{ min_interval }}" max="{{ max_interval }}">
-                        </div>
-                        <button type="submit" class="btn btn-save">Speichern</button>
-                    </form>
-                </div>
-                
-                <div class="col-preview">
-                    <div class="section-title">Aktuelle Anzeige ({{ conf.get('ROOM_NAME', '') }})</div>
-                    <div>
-                        {% if data and data is mapping and (data.current or data.next) %}
-                            <h4 style="margin: 15px 0 5px 0; font-size: 12px; color: #64748b;">JETZT</h4>
-                            {% if data.current %}
-                                <div class="lesson-block">
-                                    <div style="display: flex; justify-content: space-between; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; margin-bottom: 8px;">
-                                        <strong style="color: #0f172a; font-size: 14px;">{{ data.current.stunde }}</strong>
-                                        <span style="color: #64748b; font-size: 12px; font-weight: bold;">{{ data.current.zeit }}</span>
-                                    </div>
-                                    
-                                    {% if data.current.status_code == 'cancelled' %}<div class="tag-red">Fällt aus</div>
-                                    {% elif data.current.status_code == 'irregular' %}<div class="tag-yellow">Vertretung</div>{% endif %}
-                                    
-                                    <div style="font-size: 16px; font-weight: 800; color: #1e293b; margin-bottom: 4px;">
-                                        {{ data.current.fach_lang if data.current.fach_lang else data.current.fach }} <span style="color: #cbd5e1; margin: 0 4px;">|</span> {{ data.current.klasse }}
-                                    </div>
-                                    <div style="font-size: 12px; color: #475569; font-weight: 600;">Lehrkraft: {{ data.current.lehrer }}</div>
-                                    
-                                    {% if data.current.stunden_info %}
-                                    <div style="margin-top: 8px; padding: 6px 10px; background-color: #e2e8f0; border-radius: 6px; font-size: 11px; color: #334155; border-left: 3px solid #94a3b8;">
-                                        <strong>Info:</strong> {{ data.current.stunden_info }}
-                                    </div>
-                                    {% endif %}
-                                </div>
-                            {% else %}
-                                <div class="empty-state">{{ msg }}</div>
-                            {% endif %}
-
-                            <h4 style="margin: 20px 0 5px 0; font-size: 12px; color: #64748b;">DANACH</h4>
-                            {% if data.next %}
-                                <div class="lesson-block">
-                                    <div style="display: flex; justify-content: space-between; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; margin-bottom: 8px;">
-                                        <strong style="color: #0f172a; font-size: 14px;">{{ data.next.stunde }}</strong>
-                                        <span style="color: #64748b; font-size: 12px; font-weight: bold;">{{ data.next.zeit }}</span>
-                                    </div>
-                                    
-                                    {% if data.next.status_code == 'cancelled' %}<div class="tag-red">Fällt aus</div>
-                                    {% elif data.next.status_code == 'irregular' %}<div class="tag-yellow">Vertretung</div>{% endif %}
-                                    
-                                    <div style="font-size: 16px; font-weight: 800; color: #1e293b; margin-bottom: 4px;">
-                                        {{ data.next.fach_lang if data.next.fach_lang else data.next.fach }} <span style="color: #cbd5e1; margin: 0 4px;">|</span> {{ data.next.klasse }}
-                                    </div>
-                                    <div style="font-size: 12px; color: #475569; font-weight: 600;">Lehrkraft: {{ data.next.lehrer }}</div>
-                                    
-                                    {% if data.next.stunden_info %}
-                                    <div style="margin-top: 8px; padding: 6px 10px; background-color: #e2e8f0; border-radius: 6px; font-size: 11px; color: #334155; border-left: 3px solid #94a3b8;">
-                                        <strong>Info:</strong> {{ data.next.stunden_info }}
-                                    </div>
-                                    {% endif %}
-                                </div>
-                            {% else %}
-                                <div class="empty-state">Kein Unterricht mehr.</div>
-                            {% endif %}
-                            
-                        {% else %}
-                            <div class="empty-state" style="font-size: 16px; padding: 30px 20px;">
-                                {{ msg }}
-                            </div>
-                        {% endif %}
-                    </div>
-                </div>
-                
-                <div class="col-controls-bottom">
-                    <div class="section-title">Test & Simulation</div>
-                    <div style="background: #f8fafc; border-radius: 10px; padding: 15px; margin-bottom: 15px; border: 1px solid #e2e8f0;">
-                        <label>Datum & Uhrzeit simulieren</label>
-                        <form action="/simulate_time" method="POST" style="margin-bottom: 10px;">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                            <input type="datetime-local" name="SIM_TIME" required style="margin-bottom: 10px;">
-                            <button type="submit" class="btn btn-test">Zeit simulieren</button>
-                        </form>
-                        <form action="/reset_time" method="POST" class="inline-form">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                            <button type="submit" class="btn btn-update">Zurück zur Echtzeit</button>
-                        </form>
-                    </div>
-                    
-                    <div class="btn-group">
-                        <form action="/demo" method="POST" class="inline-form btn-full">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                            <button type="submit" class="btn btn-demo">Lokale Dummy-Daten laden</button>
-                        </form>
-                        <form action="/test_all" method="POST" class="inline-form btn-full">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                            <button type="submit" class="btn btn-test" style="background-color: #0f172a;">Display-Testlauf (ca. 30 Sek)</button>
-                        </form>
-                    </div>
-
-                    <div class="section-title">System</div>
-                    <div class="btn-group">
-                        <!-- Die onsubmit Methode wirft vorher noch einen JavaScript-Confirm-Dialog aus -->
-                        <form action="/sys_reboot" method="POST" class="inline-form btn-full" onsubmit="return confirm('Raspberry Pi wirklich neu starten? Das E-Paper wird kurz abgeschaltet.');">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                            <button type="submit" class="btn btn-test" style="background-color: #475569;">System Neustart</button>
-                        </form>
-                        <form action="/sys_shutdown" method="POST" class="inline-form btn-full" onsubmit="return confirm('ACHTUNG: Raspberry Pi wirklich herunterfahren? Er muss danach manuell vom Strom getrennt und wieder verbunden werden, um neu zu starten!');">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                            <button type="submit" class="btn btn-off" style="background-color: #94a3b8; color: #0f172a;">System Herunterfahren</button>
-                        </form>
-                    </div>
-                </div>
-
-            </div>
-            
-            <p class="footer">Status: {{ now }}{% if sim_active %} <br><strong style="color: #dc2626;">(ZEIT WIRD SIMULIERT)</strong>{% endif %}</p>
-        </div>
-    </div>
-</body>
-</html>
-"""
+# Sie liegt in tuerschild/templates/dashboard.html - dort, wo Flask sie von
+# selbst findet (das Vorlagenverzeichnis richtet sich nach dem Paket, in dem
+# Flask() aufgerufen wurde).
+#
+# Frueher standen die 232 Zeilen HTML als Zeichenkette mitten in dieser Datei.
+# Der Grund war die Installation per Copy&Paste einer einzigen Datei - seit der
+# Aufteilung in ein Paket gilt das nicht mehr. Als eigene Datei bekommt die
+# Vorlage im Editor wieder Syntaxhervorhebung und Einrueckungshilfe, und diese
+# Datei enthaelt nur noch Programmcode.
+#
+# Das Layout nutzt CSS Grid und einen Mobile-First-Ansatz (Flexbox column),
+# damit es sich auf Smartphones und Desktop-PCs automatisch anordnet.
+DASHBOARD_VORLAGE = "dashboard.html"
+# ------------------------------------------------------------------------------
 
 # ------------------------------------------------------------------------------
 # FLASK ROUTEN (Endpunkte für das Web-Interface)
@@ -457,7 +237,10 @@ def index():
     """Rendert die Hauptseite des Admin-Interfaces mit Jinja2-Templating."""
     conf = get_cached_config()
     
-    # Thread-sicherer Lesevorgang aus dem globalen State
+    # Thread-sicherer Lesevorgang aus dem globalen State.
+    # Die Rueckmeldung des Speicherformulars wird dabei GELESEN UND GELEERT:
+    # Sie gehoert zu genau einem Speichervorgang und darf nicht bei jedem
+    # spaeteren Seitenaufruf erneut erscheinen.
     with app_state.state_lock:
         is_simulated = app_state.simulated_datetime is not None
         d_data = app_state.current_display_data
@@ -465,10 +248,33 @@ def index():
         c_token = app_state.csrf_token
         is_stale = app_state.data_is_stale
         sync_dt = app_state.last_successful_sync
+        stoerung_seit = app_state.stoerung_seit
+
+        save_error = app_state.save_error
+        save_ok = app_state.save_ok
+        rejected_schedule = app_state.rejected_schedule
+        app_state.save_error = None
+        app_state.save_ok = False
+        app_state.rejected_schedule = None
 
     # Zeitstempel des letzten geglückten API-Abrufs (nur relevant, wenn wir
     # gerade aus der Offline-Rücklage anzeigen).
     last_sync = sync_dt.strftime("%d.%m.%Y %H:%M") if sync_dt else None
+
+    # Dauer einer laufenden Störung. Ab STALE_ALERT_SECONDS wird der Hinweis
+    # auf der Seite von gelb auf rot gestellt - derselbe Schwellwert, ab dem
+    # auch das Protokoll eine Meldung bekommt (siehe steuerung.py).
+    stoerung_dauer = None
+    stoerung_lang = False
+    if stoerung_seit:
+        sekunden = time.time() - stoerung_seit
+        stoerung_dauer = formatiere_dauer(sekunden)
+        stoerung_lang = sekunden >= STALE_ALERT_SECONDS
+
+    # Der Stundenplan im Textfeld: nach einer abgelehnten Eingabe der abgelehnte
+    # Text, damit die Arbeit nicht verloren geht - sonst der gespeicherte Stand.
+    schedule_text = (rejected_schedule if rejected_schedule is not None
+                     else formatiere_stundenplan(conf))
 
 
     # PÄDAGOGISCHER HINTERGRUND (Sicherheit gegen XSS):
@@ -480,8 +286,8 @@ def index():
         
     display_time = get_now().strftime("%d.%m.%Y %H:%M:%S")
 
-    return render_template_string(
-        HTML_TEMPLATE, 
+    return render_template(
+        DASHBOARD_VORLAGE,
         conf=conf, 
         data=d_data, 
         msg=d_msg_safe, 
@@ -490,6 +296,12 @@ def index():
         csrf_token=c_token,
         stale=is_stale,
         last_sync=last_sync,
+        stoerung_dauer=stoerung_dauer,
+        stoerung_lang=stoerung_lang,
+        save_error=save_error,
+        save_ok=save_ok,
+        schedule_text=schedule_text,
+        room_max=ROOM_NAME_MAX_LEN,
         min_interval=MIN_UPDATE_SECONDS,
         max_interval=MAX_UPDATE_SECONDS
     )
@@ -524,17 +336,53 @@ def reset_time():
 @requires_auth
 @verify_csrf
 def save():
+    """
+    Uebernimmt Raumname, Abrufintervall und Stundenplan aus dem Formular.
+
+    ALLES ODER NICHTS: Wird eine der Angaben abgelehnt, wird gar nichts
+    gespeichert. Ein halb uebernommenes Formular waere schlimmer als ein
+    abgelehntes - der Raum waere geaendert, der Stundenplan nicht, und niemand
+    wuesste, welcher Stand nun in der Datei steht.
+    """
     conf = get_cached_config()
-    if conf:
-        conf['ROOM_NAME'] = request.form.get('ROOM_NAME')
-        try:
-            val = int(request.form.get('AUTO_UPDATE_SECONDS', DEFAULT_UPDATE_SECONDS))
-            conf['AUTO_UPDATE_SECONDS'] = max(MIN_UPDATE_SECONDS, min(val, MAX_UPDATE_SECONDS))
-        except Exception:
-            pass
-        save_config(conf)
-        with app_state.state_lock:
-            app_state.force_update_flag = True
+    if not conf:
+        return redirect('/')
+
+    raumname, fehler = pruefe_raumname(request.form.get('ROOM_NAME'))
+    if fehler:
+        return _speichern_abgelehnt(fehler)
+
+    # Das Textfeld fehlt, wenn eine aeltere Seite noch im Browser offen ist.
+    # Dann bleibt der gespeicherte Stundenplan einfach unveraendert, statt die
+    # Eingabe mit einer Fehlermeldung abzulehnen.
+    plan_text = request.form.get('SCHEDULE')
+    stundenplan = None
+    if plan_text is not None:
+        stundenplan, fehler = pruefe_stundenplan(plan_text)
+        if fehler:
+            return _speichern_abgelehnt(fehler, plan_text)
+
+    conf['ROOM_NAME'] = raumname
+    if stundenplan is not None:
+        conf['SCHEDULE'] = stundenplan
+    try:
+        val = int(request.form.get('AUTO_UPDATE_SECONDS', DEFAULT_UPDATE_SECONDS))
+        conf['AUTO_UPDATE_SECONDS'] = max(MIN_UPDATE_SECONDS, min(val, MAX_UPDATE_SECONDS))
+    except Exception:
+        pass
+
+    save_config(conf)
+    with app_state.state_lock:
+        app_state.save_ok = True
+        app_state.force_update_flag = True
+    return redirect('/')
+
+def _speichern_abgelehnt(fehler: str, plan_text: Optional[str] = None):
+    """Merkt den Fehler fuer die naechste Seitenanzeige vor und kehrt zurueck."""
+    logging.warning(f"Speichern abgelehnt: {fehler}")
+    with app_state.state_lock:
+        app_state.save_error = fehler
+        app_state.rejected_schedule = plan_text
     return redirect('/')
 
 @app.route('/update', methods=['POST'])

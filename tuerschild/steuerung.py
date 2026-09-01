@@ -15,8 +15,10 @@ import time
 from .anzeige import update_display_logic
 from .hardware import (check_touch_via_i2c, clear_display_once,
                        clear_touch_interrupt_via_i2c)
-from .konfiguration import get_cached_config, get_now, get_update_interval
-from .konstanten import BACKGROUND_ERROR_PAUSE, TOUCH_COOLDOWN, TRANSIENT_ERRORS
+from .konfiguration import (formatiere_dauer, get_cached_config, get_now,
+                            get_update_interval)
+from .konstanten import (BACKGROUND_ERROR_PAUSE, STALE_ALERT_SECONDS,
+                         TOUCH_COOLDOWN, TRANSIENT_ERRORS)
 from .untis import get_current_lesson, get_offline_fallback
 from .zustand import Lesson, app_state
 
@@ -60,6 +62,51 @@ def run_display_test_sequence() -> None:
     with app_state.state_lock:
         app_state.test_mode_active = False
         app_state.force_update_flag = True
+
+
+def melde_stoerungsdauer(stoerung_aktiv: bool, fehler: str) -> None:
+    """
+    Haelt fest, wie lange WebUntis schon nicht erreichbar ist, und schlaegt
+    nach STALE_ALERT_SECONDS einmal Alarm.
+
+    WARUM DAS NOETIG IST:
+    Ein kurzer Ausfall ist Alltag und faellt niemandem auf - zu Recht, denn die
+    Offline-Ruecklage zeigt den Plan von heute weiter an. Genau das ist bei
+    einem laengeren Ausfall aber das Problem: Das Schild sieht vollkommen
+    gesund aus. Es zeigt einen plausiblen Stundenplan, nur eben einen, in dem
+    seit Stunden keine Vertretung und kein Ausfall mehr nachgetragen wurde.
+    Ohne diese Meldung faellt das erst auf, wenn eine Klasse vor der falschen
+    Tuer steht.
+
+    Die Meldung geht ins Protokoll (ERROR) und damit ins Journal von systemd -
+    dort, wo auch die uebrigen Betriebsmeldungen des Geraets landen. Eine
+    Benachrichtigung per Mail wuerde Zugangsdaten eines Mailservers in der
+    config.json verlangen; das waere eine Entscheidung der Schule und keine,
+    die dieses Programm ungefragt treffen sollte.
+    """
+    jetzt = time.time()
+    with app_state.state_lock:
+        if not stoerung_aktiv:
+            if app_state.stoerung_gemeldet and app_state.stoerung_seit:
+                dauer = formatiere_dauer(jetzt - app_state.stoerung_seit)
+                logging.info(f"WebUntis ist wieder erreichbar. Die Störung dauerte {dauer}.")
+            app_state.stoerung_seit = None
+            app_state.stoerung_gemeldet = False
+            return
+
+        if app_state.stoerung_seit is None:
+            app_state.stoerung_seit = jetzt
+
+        dauer_sekunden = jetzt - app_state.stoerung_seit
+        if dauer_sekunden >= STALE_ALERT_SECONDS and not app_state.stoerung_gemeldet:
+            app_state.stoerung_gemeldet = True
+            logging.error(
+                f"ANHALTENDE STÖRUNG: WebUntis ist seit {formatiere_dauer(dauer_sekunden)} "
+                f"nicht erreichbar ({fehler}). Das Schild zeigt weiterhin den zuletzt "
+                "abgerufenen Plan von heute - kurzfristige Änderungen fehlen darin. "
+                "Bitte Netzwerk und WebUntis-Zugang prüfen."
+            )
+
 
 def background_loop() -> None:
     """
@@ -171,6 +218,11 @@ def background_loop() -> None:
                             app_state.show_demo_once = False
                     else:
                         data, err = get_current_lesson(conf)
+
+                        # Vor dem Rueckgriff auf die Ruecklage festhalten, ob der
+                        # Abruf geglueckt ist: Danach steht in 'err' die Meldung
+                        # der Ruecklage und die Stoerung waere nicht mehr erkennbar.
+                        melde_stoerungsdauer(data is None and err in TRANSIENT_ERRORS, err)
 
                         # Ausfallsicherheit: Bei einer vorübergehenden Störung lieber den
                         # zuletzt abgerufenen Tagesplan weiterzeigen als eine Fehlermeldung.

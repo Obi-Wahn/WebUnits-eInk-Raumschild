@@ -91,6 +91,23 @@ class AppState:
         self.cached_lessons_date: Optional[datetime.date] = None
         self.last_successful_sync: Optional[datetime.datetime] = None
         self.data_is_stale: bool = False
+
+        # Dauer einer Stoerung. Gemessen wird mit der Systemuhr (time.time())
+        # und nicht mit get_now(): Eine gesetzte Zeitsimulation wuerde die
+        # Rechnung sonst um Stunden verfaelschen.
+        # 'stoerung_gemeldet' sorgt dafuer, dass die Meldung genau einmal im
+        # Protokoll steht und nicht bei jedem Schleifendurchlauf erneut - ein
+        # Fehler, der stuendlich hunderte Zeilen schreiben wuerde.
+        self.stoerung_seit: Optional[float] = None
+        self.stoerung_gemeldet: bool = False
+
+        # Rueckmeldung des Speicherformulars an die naechste Seitenanzeige.
+        # Wird beim Anzeigen gelesen und geleert (siehe web.index).
+        # Der abgelehnte Text wird mitgehalten, damit eine laengere Eingabe
+        # nicht verloren geht, nur weil in Zeile 12 ein Komma fehlt.
+        self.save_error: Optional[str] = None
+        self.save_ok: bool = False
+        self.rejected_schedule: Optional[str] = None
         
         # Security: Rate-Limiting gegen Brute-Force-Angriffe (IP -> {count, lockout_until})
         self.failed_logins: Dict[str, Dict[str, float]] = {}

@@ -194,4 +194,15 @@ Da der Webserver aus Sicherheitsgründen als unprivilegierter Benutzer (pi) läu
    *(Wenn Sie einen anderen Benutzernamen als pi verwenden, passen Sie das erste Wort entsprechend an)*  
    pi ALL=(ALL) NOPASSWD: /sbin/reboot, /sbin/poweroff
 
+## **10. Aktualisierungen einspielen**
+
+Spätere Programmstände werden mit dem beiliegenden Skript eingespielt:
+
+cd ~/webuntis-display  
+./update.sh
+
+Es holt den neuen Stand, installiert geänderte Abhängigkeiten nach, lässt die Testsuite laufen und startet den Dienst raumanzeige.service erst dann neu. Schlagen die Tests fehl, unterbleibt der Neustart, und das Skript nennt den Commit zum Zurückrollen — das Türschild läuft in diesem Fall unverändert weiter.
+
+Eigene, noch nicht eingecheckte Änderungen im Projektverzeichnis führen zum Abbruch, bevor etwas überschrieben wird. Die config.json mit den Zugangsdaten ist davon nicht betroffen, sie ist von der Versionskontrolle ausgenommen.
+
 Die Installation ist damit abgeschlossen. Das Administrations-Interface ist netzwerkintern unter der IP-Adresse des Raspberry Pi über HTTPS erreichbar (z. B. https://10.x.x.x). Browser-Warnungen bezüglich des selbstsignierten Zertifikats müssen für den Zugriff bestätigt werden.
