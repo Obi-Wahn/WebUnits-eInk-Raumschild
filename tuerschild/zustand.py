@@ -102,12 +102,10 @@ class AppState:
         self.stoerung_gemeldet: bool = False
 
         # Rueckmeldung des Speicherformulars an die naechste Seitenanzeige.
-        # Wird beim Anzeigen gelesen und geleert (siehe web.index).
-        # Der abgelehnte Text wird mitgehalten, damit eine laengere Eingabe
-        # nicht verloren geht, nur weil in Zeile 12 ein Komma fehlt.
+        # Wird beim Anzeigen gelesen und geleert (siehe web.index), denn sie
+        # gehoert zu genau einem Speichervorgang.
         self.save_error: Optional[str] = None
         self.save_ok: bool = False
-        self.rejected_schedule: Optional[str] = None
         
         # Security: Rate-Limiting gegen Brute-Force-Angriffe (IP -> {count, lockout_until})
         self.failed_logins: Dict[str, Dict[str, float]] = {}

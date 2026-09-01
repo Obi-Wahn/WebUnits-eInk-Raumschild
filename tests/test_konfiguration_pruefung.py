@@ -1,9 +1,9 @@
 """
-Tests fuer die Pruefung der Formulareingaben (Raumname und Stundenplan).
+Tests fuer die Pruefung der config.json.
 
 WARUM DIESE PRUEFUNG NOETIG IST:
-Beide Werte wurden bisher ungeprueft in die config.json uebernommen. Das faellt
-nicht sofort auf, sondern erst am Geraet - und dann als etwas ganz anderes:
+Beide Werte wurden bisher ungeprueft uebernommen. Das faellt nicht sofort auf,
+sondern erst am Geraet - und dann als etwas ganz anderes:
 
   * Ein leerer Raumname geht als Suchbegriff an WebUntis. Auf dem Schild steht
     dann "Raum None fehlt.", ohne dass irgendwo der Grund vermerkt waere.
@@ -11,11 +11,10 @@ nicht sofort auf, sondern erst am Geraet - und dann als etwas ganz anderes:
     Die Namen der Stunden ("1. Std.") bleiben einfach leer, weil parse_lesson()
     die Uhrzeiten als Zeichenketten vergleicht.
 
-Deshalb liegt die Pruefung in konfiguration.py und nicht im Formular: Sie
-gehoert zu den Daten, nicht zur Oberflaeche, und ist ohne Flask pruefbar.
+Beide Fehler entstehen beim Bearbeiten der Datei von Hand - so, wie es die
+Installationsanleitung beschreibt. Deshalb wird beim LADEN geprueft und
+gewarnt, nicht nur beim Speichern ueber das Formular.
 """
-import json
-
 import pytest
 
 from tuerschild import konfiguration as K
@@ -78,7 +77,7 @@ def plan(**abweichungen):
         "BREAKS": [{"start": "09:35", "end": "09:50", "name": "1. Pause"}],
     }
     grundlage.update(abweichungen)
-    return json.dumps(grundlage)
+    return grundlage
 
 
 def test_gueltiger_stundenplan_wird_uebernommen():
@@ -95,32 +94,35 @@ def test_die_beispielkonfiguration_wird_angenommen(conf):
     Test koennte die Pruefung strenger sein als die eigene Vorlage - der erste
     Speicherversuch nach der Installation wuerde dann fehlschlagen.
     """
-    ergebnis, fehler = K.pruefe_stundenplan(json.dumps(conf["SCHEDULE"]))
+    ergebnis, fehler = K.pruefe_stundenplan(conf["SCHEDULE"])
     assert fehler is None, fehler
     assert len(ergebnis["LESSONS"]) == len(conf["SCHEDULE"]["LESSONS"])
 
 
-def test_uhrzeiten_werden_vereinheitlicht():
+def test_einstellige_stunde_wird_beanstandet():
     """
-    "8:00" und "08:00" sind fuer parse_lesson() verschiedene Zeiten, weil dort
-    Zeichenketten verglichen werden. Bliebe die kurze Schreibweise stehen,
-    fehlte der Stundenname - ohne jede Fehlermeldung.
+    Der wichtigste Fall dieser Datei. "8:00" und "08:00" sind fuer
+    parse_lesson() verschiedene Zeiten, weil dort Zeichenketten verglichen
+    werden - der Stundenname bliebe leer, ohne jede Fehlermeldung.
+
+    Die Pruefung biegt das NICHT zurecht, sondern meldet es: Sie schreibt die
+    config.json nicht um. Wuerde sie die kurze Schreibweise durchwinken, bliebe
+    der Fehler in der Datei stehen und das Schild weiter stumm.
     """
     ergebnis, fehler = K.pruefe_stundenplan(
-        plan(LESSONS=[{"start": "8:00", "end": "8:45", "name": "1. Std."}]))
-    assert fehler is None
-    assert ergebnis["LESSONS"][0]["start"] == "08:00"
-    assert ergebnis["LESSONS"][0]["end"] == "08:45"
-
-
-def test_kaputtes_json_wird_abgelehnt():
-    ergebnis, fehler = K.pruefe_stundenplan('{"DAY_START": "08:00",}')
+        plan(LESSONS=[{"start": "8:00", "end": "08:45", "name": "1. Std."}]))
     assert ergebnis is None
-    assert "JSON" in fehler
+    assert "08:00" in fehler, "Die Meldung muss die richtige Schreibweise nennen"
 
 
-def test_json_das_kein_objekt_ist_wird_abgelehnt():
-    ergebnis, fehler = K.pruefe_stundenplan('["08:00"]')
+def test_einstellige_stunde_faellt_auch_im_tagesbeginn_auf():
+    ergebnis, fehler = K.pruefe_stundenplan(plan(DAY_START="7:55"))
+    assert ergebnis is None
+    assert "07:55" in fehler
+
+
+def test_was_kein_objekt_ist_wird_abgelehnt():
+    ergebnis, fehler = K.pruefe_stundenplan(["08:00"])
     assert ergebnis is None
     assert fehler
 
@@ -198,7 +200,7 @@ def test_fehlende_listen_gelten_als_leer():
     Eine Schule ohne eingetragene Pausen ist zulaessig. Sie soll nicht gezwungen
     sein, ein leeres BREAKS-Feld hinzuschreiben.
     """
-    ergebnis, fehler = K.pruefe_stundenplan('{"DAY_START": "08:00", "DAY_END": "13:00"}')
+    ergebnis, fehler = K.pruefe_stundenplan({"DAY_START": "08:00", "DAY_END": "13:00"})
     assert fehler is None
     assert ergebnis["LESSONS"] == []
     assert ergebnis["BREAKS"] == []
@@ -210,7 +212,7 @@ def test_unbekannte_felder_werden_verworfen():
     ins Textfeld schreibt, ungeprueft und dauerhaft in der config.json.
     """
     ergebnis, fehler = K.pruefe_stundenplan(
-        '{"DAY_START": "08:00", "DAY_END": "13:00", "ADMIN_PASS": "geheim"}')
+        {"DAY_START": "08:00", "DAY_END": "13:00", "ADMIN_PASS": "geheim"})
     assert fehler is None
     assert "ADMIN_PASS" not in ergebnis
     assert set(ergebnis) == {"DAY_START", "DAY_END", "LESSONS", "BREAKS"}
@@ -220,24 +222,3 @@ def test_ueberzaehlige_felder_in_einer_stunde_werden_verworfen():
     ergebnis, _ = K.pruefe_stundenplan(plan(LESSONS=[
         {"start": "08:00", "end": "08:45", "name": "1. Std.", "raum": "unerwartet"}]))
     assert set(ergebnis["LESSONS"][0]) == {"start", "end", "name"}
-
-
-# ==============================================================================
-# Darstellung fuer das Textfeld
-# ==============================================================================
-def test_stundenplan_wird_lesbar_aufbereitet(conf):
-    text = K.formatiere_stundenplan(conf)
-    assert "\n" in text, "Ohne Einrueckung ist der Plan im Textfeld unlesbar"
-    assert "\\u" not in text, "Umlaute muessen als Umlaute erscheinen"
-    # Wichtigste Eigenschaft: Was hier herauskommt, muss die Pruefung bestehen.
-    zurueck, fehler = K.pruefe_stundenplan(text)
-    assert fehler is None
-    assert zurueck["LESSONS"] == conf["SCHEDULE"]["LESSONS"]
-
-
-def test_fehlender_stundenplan_ergibt_eine_brauchbare_vorlage():
-    """Ohne diesen Rueckfall stuende im Textfeld "null" - nicht bearbeitbar."""
-    text = K.formatiere_stundenplan({})
-    ergebnis, fehler = K.pruefe_stundenplan(text)
-    assert fehler is None
-    assert ergebnis["LESSONS"] == []

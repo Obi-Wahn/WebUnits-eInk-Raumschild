@@ -21,9 +21,8 @@ from flask import Flask, abort, redirect, render_template, request, Response
 from markupsafe import Markup, escape
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from .konfiguration import (formatiere_dauer, formatiere_stundenplan,
-                            get_cached_config, get_now, pruefe_raumname,
-                            pruefe_stundenplan, save_config)
+from .konfiguration import (formatiere_dauer, get_cached_config, get_now,
+                            pruefe_raumname, save_config)
 from .konstanten import (DEFAULT_UPDATE_SECONDS, FAILED_LOGIN_MAX,
                          FAILED_LOGIN_TTL, LOGIN_LOCKOUT_SECONDS,
                          MAX_LOGIN_ATTEMPTS, MAX_UPDATE_SECONDS,
@@ -252,10 +251,8 @@ def index():
 
         save_error = app_state.save_error
         save_ok = app_state.save_ok
-        rejected_schedule = app_state.rejected_schedule
         app_state.save_error = None
         app_state.save_ok = False
-        app_state.rejected_schedule = None
 
     # Zeitstempel des letzten geglückten API-Abrufs (nur relevant, wenn wir
     # gerade aus der Offline-Rücklage anzeigen).
@@ -270,11 +267,6 @@ def index():
         sekunden = time.time() - stoerung_seit
         stoerung_dauer = formatiere_dauer(sekunden)
         stoerung_lang = sekunden >= STALE_ALERT_SECONDS
-
-    # Der Stundenplan im Textfeld: nach einer abgelehnten Eingabe der abgelehnte
-    # Text, damit die Arbeit nicht verloren geht - sonst der gespeicherte Stand.
-    schedule_text = (rejected_schedule if rejected_schedule is not None
-                     else formatiere_stundenplan(conf))
 
 
     # PÄDAGOGISCHER HINTERGRUND (Sicherheit gegen XSS):
@@ -300,7 +292,6 @@ def index():
         stoerung_lang=stoerung_lang,
         save_error=save_error,
         save_ok=save_ok,
-        schedule_text=schedule_text,
         room_max=ROOM_NAME_MAX_LEN,
         min_interval=MIN_UPDATE_SECONDS,
         max_interval=MAX_UPDATE_SECONDS
@@ -337,12 +328,15 @@ def reset_time():
 @verify_csrf
 def save():
     """
-    Uebernimmt Raumname, Abrufintervall und Stundenplan aus dem Formular.
+    Uebernimmt Raumname und Abrufintervall aus dem Formular.
 
-    ALLES ODER NICHTS: Wird eine der Angaben abgelehnt, wird gar nichts
-    gespeichert. Ein halb uebernommenes Formular waere schlimmer als ein
-    abgelehntes - der Raum waere geaendert, der Stundenplan nicht, und niemand
-    wuesste, welcher Stand nun in der Datei steht.
+    Der Raumname wurde bisher ungeprueft uebernommen. Ein leeres Feld fuehrte
+    dazu, dass das Schild "Raum None fehlt." anzeigte - der Name geht als
+    Suchbegriff an WebUntis -, und die Ursache stand nirgends.
+
+    ALLES ODER NICHTS: Wird eine Angabe abgelehnt, wird gar nichts gespeichert.
+    Ein halb uebernommenes Formular waere schlimmer als ein abgelehntes -
+    niemand wuesste, welcher Stand nun in der Datei steht.
     """
     conf = get_cached_config()
     if not conf:
@@ -350,21 +344,12 @@ def save():
 
     raumname, fehler = pruefe_raumname(request.form.get('ROOM_NAME'))
     if fehler:
-        return _speichern_abgelehnt(fehler)
-
-    # Das Textfeld fehlt, wenn eine aeltere Seite noch im Browser offen ist.
-    # Dann bleibt der gespeicherte Stundenplan einfach unveraendert, statt die
-    # Eingabe mit einer Fehlermeldung abzulehnen.
-    plan_text = request.form.get('SCHEDULE')
-    stundenplan = None
-    if plan_text is not None:
-        stundenplan, fehler = pruefe_stundenplan(plan_text)
-        if fehler:
-            return _speichern_abgelehnt(fehler, plan_text)
+        logging.warning(f"Speichern abgelehnt: {fehler}")
+        with app_state.state_lock:
+            app_state.save_error = fehler
+        return redirect('/')
 
     conf['ROOM_NAME'] = raumname
-    if stundenplan is not None:
-        conf['SCHEDULE'] = stundenplan
     try:
         val = int(request.form.get('AUTO_UPDATE_SECONDS', DEFAULT_UPDATE_SECONDS))
         conf['AUTO_UPDATE_SECONDS'] = max(MIN_UPDATE_SECONDS, min(val, MAX_UPDATE_SECONDS))
@@ -375,14 +360,6 @@ def save():
     with app_state.state_lock:
         app_state.save_ok = True
         app_state.force_update_flag = True
-    return redirect('/')
-
-def _speichern_abgelehnt(fehler: str, plan_text: Optional[str] = None):
-    """Merkt den Fehler fuer die naechste Seitenanzeige vor und kehrt zurueck."""
-    logging.warning(f"Speichern abgelehnt: {fehler}")
-    with app_state.state_lock:
-        app_state.save_error = fehler
-        app_state.rejected_schedule = plan_text
     return redirect('/')
 
 @app.route('/update', methods=['POST'])
