@@ -93,14 +93,18 @@
            sonst gewinnt dort die graue Grundfarbe und die Warnung faellt aus. */
         .status-liste dd.status-warn { color: #b45309; }
 
-        .lesson-block { background: #f8fafc; border-radius: 10px; padding: 15px; margin-top: 10px; border: 1px solid #e2e8f0; }
-        .empty-state { text-align: center; color: #94a3b8; font-size: 13px; padding: 20px; background: #f8fafc; border-radius: 10px; margin-top: 10px; font-weight: bold; }
+        /* Rahmen um die Vorschau. Das Bild ist ein echtes 1-Bit-Bitmap in
+           250x122 - also winzig. Es wird auf die Spaltenbreite hochskaliert;
+           "pixelated" verhindert dabei das Weichzeichnen, sonst saehe die
+           Vorschau schaerfer und sauberer aus als das Schild in Wirklichkeit. */
+        .panel { background: #0f172a; padding: 10px; border-radius: 10px; }
+        .panel img { display: block; width: 100%; height: auto; image-rendering: pixelated; background: white; border-radius: 3px; }
+        .panel-hinweis { font-size: 11px; color: #94a3b8; text-align: center; margin: 8px 0 0; font-weight: 600; }
+
         .error-msg { background-color: #fee2e2; color: #dc2626; padding: 15px; border-radius: 10px; font-size: 13px; font-weight: bold; text-align: center; margin-bottom: 20px; line-height: 1.5; }
         .ok-msg { background-color: #dcfce7; color: #15803d; padding: 15px; border-radius: 10px; font-size: 13px; font-weight: bold; text-align: center; margin-bottom: 20px; }
         .warn-msg { background-color: #fef3c7; color: #854d0e; padding: 15px; border-radius: 10px; font-size: 13px; font-weight: bold; text-align: center; margin-bottom: 20px; line-height: 1.5; }
         
-        .tag-red { background-color: #fee2e2; color: #dc2626; padding: 4px 8px; border-radius: 5px; font-size: 11px; font-weight: bold; text-transform: uppercase; margin-bottom: 6px; display: inline-block;}
-        .tag-yellow { background-color: #fef08a; color: #854d0e; padding: 4px 8px; border-radius: 5px; font-size: 11px; font-weight: bold; text-transform: uppercase; margin-bottom: 6px; display: inline-block;}
 
         @media (min-width: 800px) {
             body { padding: 40px 20px; }
@@ -129,8 +133,6 @@
             .col-controls-bottom { grid-column: 1 / span 2; grid-row: 2; display: grid; grid-template-columns: 1fr 1fr; gap: 40px; align-items: start; }
             .block-system .section-title { margin-top: 0; }
             .col-preview .section-title { margin-top: 0; }
-            .col-preview .lesson-block { background: white; }
-            .col-preview .empty-state { background: white; }
         }
     </style>
 </head>
@@ -227,67 +229,18 @@
                 </div>
                 
                 <div class="col-preview">
-                    <div class="section-title">Aktuelle Anzeige ({{ conf.get('ROOM_NAME', '') }})</div>
-                    <div>
-                        {% if data and data is mapping and (data.current or data.next) %}
-                            <h4 style="margin: 15px 0 5px 0; font-size: 12px; color: #64748b;">JETZT</h4>
-                            {% if data.current %}
-                                <div class="lesson-block">
-                                    <div style="display: flex; justify-content: space-between; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; margin-bottom: 8px;">
-                                        <strong style="color: #0f172a; font-size: 14px;">{{ data.current.stunde }}</strong>
-                                        <span style="color: #64748b; font-size: 12px; font-weight: bold;">{{ data.current.zeit }}</span>
-                                    </div>
-                                    
-                                    {% if data.current.status_code == 'cancelled' %}<div class="tag-red">Fällt aus</div>
-                                    {% elif data.current.status_code == 'irregular' %}<div class="tag-yellow">Vertretung</div>{% endif %}
-                                    
-                                    <div style="font-size: 16px; font-weight: 800; color: #1e293b; margin-bottom: 4px;">
-                                        {{ data.current.fach_lang if data.current.fach_lang else data.current.fach }} <span style="color: #cbd5e1; margin: 0 4px;">|</span> {{ data.current.klasse }}
-                                    </div>
-                                    <div style="font-size: 12px; color: #475569; font-weight: 600;">Lehrkraft: {{ data.current.lehrer }}</div>
-                                    
-                                    {% if data.current.stunden_info %}
-                                    <div style="margin-top: 8px; padding: 6px 10px; background-color: #e2e8f0; border-radius: 6px; font-size: 11px; color: #334155; border-left: 3px solid #94a3b8;">
-                                        <strong>Info:</strong> {{ data.current.stunden_info }}
-                                    </div>
-                                    {% endif %}
-                                </div>
-                            {% else %}
-                                <div class="empty-state">{{ msg }}</div>
-                            {% endif %}
+                    <div class="section-title">Aktuelle Anzeige</div>
 
-                            <h4 style="margin: 20px 0 5px 0; font-size: 12px; color: #64748b;">DANACH</h4>
-                            {% if data.next %}
-                                <div class="lesson-block">
-                                    <div style="display: flex; justify-content: space-between; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; margin-bottom: 8px;">
-                                        <strong style="color: #0f172a; font-size: 14px;">{{ data.next.stunde }}</strong>
-                                        <span style="color: #64748b; font-size: 12px; font-weight: bold;">{{ data.next.zeit }}</span>
-                                    </div>
-                                    
-                                    {% if data.next.status_code == 'cancelled' %}<div class="tag-red">Fällt aus</div>
-                                    {% elif data.next.status_code == 'irregular' %}<div class="tag-yellow">Vertretung</div>{% endif %}
-                                    
-                                    <div style="font-size: 16px; font-weight: 800; color: #1e293b; margin-bottom: 4px;">
-                                        {{ data.next.fach_lang if data.next.fach_lang else data.next.fach }} <span style="color: #cbd5e1; margin: 0 4px;">|</span> {{ data.next.klasse }}
-                                    </div>
-                                    <div style="font-size: 12px; color: #475569; font-weight: 600;">Lehrkraft: {{ data.next.lehrer }}</div>
-                                    
-                                    {% if data.next.stunden_info %}
-                                    <div style="margin-top: 8px; padding: 6px 10px; background-color: #e2e8f0; border-radius: 6px; font-size: 11px; color: #334155; border-left: 3px solid #94a3b8;">
-                                        <strong>Info:</strong> {{ data.next.stunden_info }}
-                                    </div>
-                                    {% endif %}
-                                </div>
-                            {% else %}
-                                <div class="empty-state">Kein Unterricht mehr.</div>
-                            {% endif %}
-                            
-                        {% else %}
-                            <div class="empty-state" style="font-size: 16px; padding: 30px 20px;">
-                                {{ msg }}
-                            </div>
-                        {% endif %}
+                    {# Kein Nachbau in HTML, sondern das Bild selbst: /vorschau.png
+                       wird mit derselben Funktion gezeichnet, die auch das E-Paper
+                       bemalt. Der Zeitstempel im Verweis verhindert, dass der
+                       Browser nach einem Update das alte Bild aus dem Zwischen-
+                       speicher zeigt. #}
+                    <div class="panel">
+                        <img src="/vorschau.png?t={{ now }}" width="250" height="122"
+                             alt="Anzeige im Raum {{ conf.get('ROOM_NAME', '') }} &ndash; {{ beschreibung }}">
                     </div>
+                    <p class="panel-hinweis">250 &times; 122 Pixel &ndash; genau das steht auf dem Schild</p>
 
                     <div class="status-liste">
                         <div><dt>Letzter Abruf</dt>

@@ -47,7 +47,7 @@ from .konfiguration import (CONFIG_FILE, formatiere_dauer, get_cached_config,
 from .hardware import (check_touch_via_i2c, clear_display_once,
                        clear_touch_interrupt_via_i2c, init_fonts)
 from .anzeige import (build_detail_line, draw_lesson_block, get_text_width,
-                      truncate_to_width, update_display_logic)
+                      truncate_to_width, update_display_logic, zeichne_anzeige)
 from .untis import (get_current_lesson, get_offline_fallback, parse_lesson,
                     resolve_timetable, select_lessons)
 from .steuerung import (background_loop, melde_stoerungsdauer,

@@ -188,8 +188,12 @@ def test_bei_stoerung_erscheint_das_warnbanner(webclient):
 def test_api_texte_werden_maskiert(webclient):
     """
     Schutz gegen Cross-Site Scripting: Texte aus der WebUntis-API landen
-    ungeprueft im Dashboard. Enthielten sie HTML, duerfte es nicht ausgefuehrt
-    werden.
+    ungeprueft im Dashboard - inzwischen in der Beschreibung der Vorschau.
+    Enthielten sie HTML, duerfte es nicht ausgefuehrt werden.
+
+    Seit die Vorschau ein Bild ist, baut die Seite aus diesen Texten gar kein
+    HTML mehr zusammen; Jinja maskiert sie beim Einsetzen ins Attribut. Die
+    Zusicherung gilt unveraendert, nur der Weg dorthin ist ein anderer.
     """
     client, kopf = webclient
     R.app_state.current_display_msg = "<script>alert('xss')</script>"
@@ -199,13 +203,21 @@ def test_api_texte_werden_maskiert(webclient):
     assert "&lt;script&gt;" in inhalt
 
 
-def test_zeilenumbrueche_in_meldungen_werden_dargestellt(webclient):
-    """'Schöne Ferien!\\n(Sommerferien)' soll im Browser zweizeilig erscheinen."""
+def test_die_meldung_steht_in_der_bildbeschreibung(webclient):
+    """
+    Die Vorschau ist ein Bild und damit fuer eine Vorlesesoftware stumm. Was
+    auf dem Schild steht, muss deshalb im alt-Attribut als Text erscheinen.
+
+    Frueher stand die Meldung als HTML auf der Seite und der Zeilenumbruch
+    wurde zu <br>. In einem Attribut waere ein <br> sinnlos - der Umbruch wird
+    hier zum Leerzeichen.
+    """
     client, kopf = webclient
     R.app_state.current_display_msg = "Schöne Ferien!\n(Sommerferien)"
 
     inhalt = client.get("/", headers=kopf).get_data(as_text=True)
-    assert "Schöne Ferien!<br>(Sommerferien)" in inhalt
+    assert 'alt="' in inhalt
+    assert "Schöne Ferien! (Sommerferien)" in inhalt
 
 
 def test_simulierte_zeit_wird_im_dashboard_ausgewiesen(webclient):

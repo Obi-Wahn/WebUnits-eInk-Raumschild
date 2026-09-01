@@ -14,6 +14,7 @@ Dieses Projekt stellt ein automatisiertes, digitales Türschild für den Einsatz
 * **Responsives & Sicheres Administrations-Interface:** Die Verwaltung erfolgt über ein lokales Web-Interface. Dank modernem **CSS-Grid** und **Mobile-First-Ansatz** passt sich das Layout perfekt an: Auf dem Smartphone fließen die Bedienelemente logisch untereinander, auf einem Desktop-Monitor entfaltet sich ein Zwei-Spalten-Cockpit. Abgesichert ist das Ganze durch Nginx als Reverse Proxy (HTTPS/SSL) sowie HTTP Basic Authentication.
 * **Sichere Systemsteuerung & Architektur:** Über das Web-Interface lässt sich der Raspberry Pi per Knopfdruck sicher neu starten oder herunterfahren. Zustandsändernde Aktionen sind durch POST-Requests (CSRF-Schutz) gesichert. Schreibvorgänge in die Konfigurationsdatei erfolgen atomar, um Datenkorruption bei plötzlichem Stromausfall zu vermeiden.
 * **Integrierte Diagnose:** Ein implementierter Testlauf ermöglicht die Überprüfung aller Display-Zustände und Fehlermeldungen direkt über das Web-Interface.
+* **Vorschau als 1:1-Abbild:** Das Web-Interface zeigt keine Nachbildung des Schildes, sondern dasselbe Bild — gezeichnet mit genau der Funktion, die auch das E-Paper bemalt, und als PNG in 250 × 122 Pixeln ausgeliefert. Damit sieht man aus der Ferne auch das, was eine HTML-Nachbildung nie zeigen konnte: was auf dem schmalen Panel tatsächlich Platz hat und wo ein langer Fachname gekürzt wird.
 * **Geprüfte Konfiguration:** Beim Einlesen der `config.json` wird gemeldet, was am Raumnamen und am Stundenplan nicht stimmt — mit Angabe des betroffenen Eintrags. Diese Fehler äußern sich sonst nicht als Fehlermeldung, sondern als stille Unauffälligkeit: `"8:00"` statt `"08:00"` lässt den Stundennamen einfach leer, ein leerer Raumname erzeugt ein „Raum None fehlt." ohne erkennbaren Grund. Gewarnt wird nur, abgelehnt nichts — ein Türschild, das wegen eines Kommafehlers gar nicht erst startet, wäre die schlechtere Lösung.
 * **Meldung bei anhaltender Störung:** Ein kurzer Ausfall bleibt eine Randnotiz — die Offline-Rücklage trägt ihn. Dauert er länger als drei Stunden, wird daraus eine Fehlermeldung im Systemprotokoll und ein roter Hinweis samt Dauer im Web-Interface. Ohne diese Eskalation sähe das Schild weiterhin völlig gesund aus: Es zeigt ja einen plausiblen Plan, nur eben einen, in dem seit Stunden keine Vertretung mehr nachgetragen wurde.
 
@@ -128,6 +129,8 @@ Der Programmcode liegt im Paket `tuerschild/`, aufgeteilt in Ebenen, die aufeina
 | `web.py` | Flask-Oberfläche zur Administration |
 | `steuerung.py` | Hintergrundschleife, die alles zusammenführt |
 | `templates/dashboard.html` | Die HTML-Vorlage des Web-Interfaces |
+
+Das Zeichnen des Displays steht in `anzeige.zeichne_anzeige()` und ist vom Senden getrennt. Das Web-Interface benutzt dieselbe Funktion für seine Vorschau (`/vorschau.png`), fasst dabei aber keine Hardware an — es wird nur gezeichnet, nichts übertragen. Ein Aufruf ist deshalb auch bei arbeitendem Türschild harmlos.
 
 Die Vorlage lag früher als 232-zeilige Zeichenkette in `web.py` — ein Zugeständnis an die Installation per Copy&Paste einer einzigen Datei. Seit der Aufteilung in ein Paket gilt das nicht mehr; als eigene Datei bekommt sie im Editor wieder Syntaxhervorhebung, und `web.py` enthält nur noch Programmcode.
 
