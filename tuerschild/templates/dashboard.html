@@ -8,9 +8,17 @@
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f1f5f9; color: #1e293b; margin: 0; padding: 15px; display: flex; justify-content: center; }
         .card { background: white; max-width: 950px; width: 100%; border-radius: 20px; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1); overflow: hidden; margin-top: 10px; margin-bottom: 20px; }
         
-        .header { background-color: #0f172a; color: white; padding: 30px; }
+        .header { background-color: #0f172a; color: white; padding: 30px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 12px; }
         .header h1 { margin: 0; font-size: 24px; letter-spacing: -1px; text-transform: uppercase; }
         .header p { margin: 5px 0 0; opacity: 0.6; font-size: 12px; font-weight: bold; }
+
+        /* Der Zeitstempel sagt, wie aktuell das Gezeigte ist - er gehoert
+           deshalb neben den Raumnamen und nicht unter den letzten Knopf.
+           Die Farben sind fuer den dunklen Grund gewaehlt: #94a3b8 ergibt
+           dort 7,0:1, das helle Rot 6,5:1. Das kraeftige #dc2626 der uebrigen
+           Warnungen kaeme auf diesem Grund nur auf 3,7:1. */
+        .kopf-status { font-size: 11px; font-weight: bold; color: #94a3b8; letter-spacing: 0.5px; }
+        .kopf-status .simuliert { display: block; margin-top: 4px; color: #f87171; text-transform: uppercase; }
         .content { padding: 30px; }
         
         .dashboard-grid { display: flex; flex-direction: column; gap: 0; }
@@ -70,10 +78,6 @@
         .error-msg { background-color: #fee2e2; color: #dc2626; padding: 15px; border-radius: 10px; font-size: 13px; font-weight: bold; text-align: center; margin-bottom: 20px; line-height: 1.5; }
         .ok-msg { background-color: #dcfce7; color: #15803d; padding: 15px; border-radius: 10px; font-size: 13px; font-weight: bold; text-align: center; margin-bottom: 20px; }
         .warn-msg { background-color: #fef3c7; color: #854d0e; padding: 15px; border-radius: 10px; font-size: 13px; font-weight: bold; text-align: center; margin-bottom: 20px; line-height: 1.5; }
-        /* #cbd5e1 auf Weiss ergab rund 1,5:1 Kontrast - gefordert sind 4,5:1.
-           Die Zeile war damit praktisch unsichtbar, obwohl in ihr auch der
-           Hinweis auf eine laufende Zeitsimulation steht. #64748b bringt 4,8:1. */
-        .footer { text-align: center; font-size: 10px; color: #64748b; margin-top: 35px; text-transform: uppercase; letter-spacing: 1px; }
         
         .tag-red { background-color: #fee2e2; color: #dc2626; padding: 4px 8px; border-radius: 5px; font-size: 11px; font-weight: bold; text-transform: uppercase; margin-bottom: 6px; display: inline-block;}
         .tag-yellow { background-color: #fef08a; color: #854d0e; padding: 4px 8px; border-radius: 5px; font-size: 11px; font-weight: bold; text-transform: uppercase; margin-bottom: 6px; display: inline-block;}
@@ -103,8 +107,14 @@
 <body>
     <div class="card">
         <div class="header">
-            <h1>Display-Control</h1>
-            <p>{{ conf.get('ROOM_NAME', 'Unbekannt') }} | Raumanzeige</p>
+            <div>
+                <h1>Display-Control</h1>
+                <p>{{ conf.get('ROOM_NAME', 'Unbekannt') }} | Raumanzeige</p>
+            </div>
+            <div class="kopf-status">
+                Stand: {{ now }}
+                {% if sim_active %}<span class="simuliert">Zeit wird simuliert</span>{% endif %}
+            </div>
         </div>
         
         <div class="content">
@@ -309,8 +319,6 @@
                 </div>
 
             </div>
-            
-            <p class="footer">Status: {{ now }}{% if sim_active %} <br><strong style="color: #dc2626;">(ZEIT WIRD SIMULIERT)</strong>{% endif %}</p>
         </div>
     </div>
 </body>

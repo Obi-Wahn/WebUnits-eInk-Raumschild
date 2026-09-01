@@ -209,7 +209,16 @@ def test_zeilenumbrueche_in_meldungen_werden_dargestellt(webclient):
 
 
 def test_simulierte_zeit_wird_im_dashboard_ausgewiesen(webclient):
+    """
+    Ohne diesen Hinweis zeigt die Seite ein voellig plausibles Datum, das mit
+    der Wirklichkeit nichts zu tun hat.
+
+    Verglichen wird bewusst ohne Ruecksicht auf Gross- und Kleinschreibung: Die
+    Versalien kommen inzwischen aus dem Stylesheet (text-transform), stehen
+    also nicht mehr im Quelltext. Der Test soll die Aussage festhalten, nicht
+    die Schreibweise.
+    """
     client, kopf = webclient
     R.app_state.simulated_datetime = uhrzeit(9, 0)
     inhalt = client.get("/", headers=kopf).get_data(as_text=True)
-    assert "ZEIT WIRD SIMULIERT" in inhalt
+    assert "zeit wird simuliert" in inhalt.lower()
