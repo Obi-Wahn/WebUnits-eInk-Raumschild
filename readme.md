@@ -14,6 +14,8 @@ Dieses Projekt stellt ein automatisiertes, digitales Türschild für den Einsatz
 * **Responsives & Sicheres Administrations-Interface:** Die Verwaltung erfolgt über ein lokales Web-Interface. Dank modernem **CSS-Grid** und **Mobile-First-Ansatz** passt sich das Layout perfekt an: Auf dem Smartphone fließen die Bedienelemente logisch untereinander, auf einem Desktop-Monitor entfaltet sich ein Zwei-Spalten-Cockpit. Abgesichert ist das Ganze durch Nginx als Reverse Proxy (HTTPS/SSL) sowie HTTP Basic Authentication.
 * **Sichere Systemsteuerung & Architektur:** Über das Web-Interface lässt sich der Raspberry Pi per Knopfdruck sicher neu starten oder herunterfahren. Zustandsändernde Aktionen sind durch POST-Requests (CSRF-Schutz) gesichert. Schreibvorgänge in die Konfigurationsdatei erfolgen atomar, um Datenkorruption bei plötzlichem Stromausfall zu vermeiden.
 * **Integrierte Diagnose:** Ein implementierter Testlauf ermöglicht die Überprüfung aller Display-Zustände und Fehlermeldungen direkt über das Web-Interface.
+* **Stundenplan im Web-Interface pflegbar:** Unterrichts- und Pausenzeiten lassen sich direkt im Browser bearbeiten; ein SSH-Zugang ist dafür nicht mehr nötig. Jede Uhrzeit wird beim Speichern geprüft und einheitlich als `HH:MM` abgelegt — eine fehlerhafte Eingabe wird abgelehnt, der eingegebene Text bleibt erhalten, und die Meldung nennt den betroffenen Eintrag. Angenommen wird nur ein vollständig gültiges Formular, damit nie ein halb übernommener Stand in der Konfiguration steht.
+* **Meldung bei anhaltender Störung:** Ein kurzer Ausfall bleibt eine Randnotiz — die Offline-Rücklage trägt ihn. Dauert er länger als drei Stunden, wird daraus eine Fehlermeldung im Systemprotokoll und ein roter Hinweis samt Dauer im Web-Interface. Ohne diese Eskalation sähe das Schild weiterhin völlig gesund aus: Es zeigt ja einen plausiblen Plan, nur eben einen, in dem seit Stunden keine Vertretung mehr nachgetragen wurde.
 
 ## **🛠️ Hardware-Voraussetzungen**
 
@@ -110,14 +112,34 @@ Der Programmcode liegt im Paket `tuerschild/`, aufgeteilt in Ebenen, die aufeina
 | `untis.py` | Abruf der Plandaten und Offline-Rücklage |
 | `web.py` | Flask-Oberfläche zur Administration |
 | `steuerung.py` | Hintergrundschleife, die alles zusammenführt |
+| `templates/dashboard.html` | Die HTML-Vorlage des Web-Interfaces |
+
+Die Vorlage lag früher als 232-zeilige Zeichenkette in `web.py` — ein Zugeständnis an die Installation per Copy&Paste einer einzigen Datei. Seit der Aufteilung in ein Paket gilt das nicht mehr; als eigene Datei bekommt sie im Editor wieder Syntaxhervorhebung, und `web.py` enthält nur noch Programmcode.
 
 Gestartet wird weiterhin über `raumanzeige.py` im Projektverzeichnis — dort steht nur noch, was zum Starten und sauberen Beenden gehört.
 
 *Hinweis für Änderungen:* Soll in Tests eine Funktion ersetzt werden, muss das im **definierenden** Modul geschehen (etwa `tuerschild.hardware.epd2in13_V3`). Die Sammel-Importe in `tuerschild/__init__.py` sind Kopien der Verweise; ein Ersetzen dort träfe nur diese Kopie.
 
+## **🔄 Aktualisieren**
+
+Ein neuer Programmstand wird mit `update.sh` eingespielt:
+
+```bash
+cd ~/webuntis-display
+./update.sh
+```
+
+Das Skript holt den neuen Stand, installiert geänderte Abhängigkeiten nach (nur wenn sich `requirements.txt` wirklich geändert hat — ein `pip`-Lauf dauert auf einem Pi Zero mehrere Minuten), lässt die Tests laufen und startet erst danach den Dienst neu. **Schlagen die Tests fehl, unterbleibt der Neustart** und das Skript nennt den Commit zum Zurückrollen. Der laufende Dienst arbeitet dann unverändert weiter, denn er hat sein Programm längst im Speicher.
+
+Eigene, nicht eingecheckte Änderungen im Projektverzeichnis führen zum Abbruch, bevor irgendetwas überschrieben wird. Die `config.json` ist davon nicht betroffen — sie steht in der `.gitignore`.
+
+Zwei Schalter für Sonderfälle: `--ohne-tests` und `--ohne-neustart`.
+
+*Wird das Programm von Hand gestartet statt als Dienst* (etwa im Testbetrieb), sagt das Skript das und weist darauf hin, dass der laufende Prozess von Hand beendet und neu gestartet werden muss.
+
 ## **🧪 Tests**
 
-Das Projekt bringt eine automatisierte Testsuite mit. Sie prüft die Logik des Programms — Stundenauswahl, Offline-Rücklage, Textlayout, Konfigurationsgrenzen sowie Anmeldung und CSRF-Schutz des Web-Interfaces.
+Das Projekt bringt eine automatisierte Testsuite mit. Sie prüft die Logik des Programms — Stundenauswahl, Offline-Rücklage, Textlayout, Konfigurationsgrenzen, die Prüfung der Formulareingaben, die Meldung bei anhaltenden Störungen sowie Anmeldung und CSRF-Schutz des Web-Interfaces.
 
 **Ausführen auf dem Raspberry Pi:**
 

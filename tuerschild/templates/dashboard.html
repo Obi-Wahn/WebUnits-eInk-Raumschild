@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Türschild-Admin</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f1f5f9; color: #1e293b; margin: 0; padding: 15px; display: flex; justify-content: center; }
+        .card { background: white; max-width: 950px; width: 100%; border-radius: 20px; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1); overflow: hidden; margin-top: 10px; margin-bottom: 20px; }
+        
+        .header { background-color: #0f172a; color: white; padding: 30px; }
+        .header h1 { margin: 0; font-size: 24px; letter-spacing: -1px; text-transform: uppercase; }
+        .header p { margin: 5px 0 0; opacity: 0.6; font-size: 12px; font-weight: bold; }
+        .content { padding: 30px; }
+        
+        .dashboard-grid { display: flex; flex-direction: column; gap: 0; }
+        .col-preview { margin-top: 20px; margin-bottom: 20px; }
+        
+        .section-title { font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; margin: 30px 0 15px 0; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px; letter-spacing: 0.5px; }
+        .section-title:first-child { margin-top: 0; }
+        
+        form.inline-form { margin: 0; }
+        .btn-group { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; }
+        .btn-full { grid-column: span 2; }
+        .btn { width: 100%; box-sizing: border-box; display: block; text-decoration: none; text-align: center; padding: 15px; border-radius: 12px; font-weight: bold; color: white; transition: transform 0.1s; border: none; cursor: pointer; font-size: 14px;}
+        .btn:active { transform: scale(0.98); }
+        .btn-update { background-color: #007BFF; } 
+        .btn-demo { background-color: #6f42c1; } 
+        .btn-off { background-color: #DC3545; }    
+        .btn-on { background-color: #28A745; } 
+        .btn-test { background-color: #f59e0b; }    
+        .btn-save { background-color: #0f172a; width: 100%; font-size: 16px; margin-top: 5px; color: white; padding: 15px; border-radius: 12px; font-weight: bold; }
+        
+        .form-group { margin-bottom: 20px; }
+        label { display: block; font-size: 10px; font-weight: 800; color: #94a3b8; text-transform: uppercase; margin-bottom: 5px; }
+        input { width: 100%; box-sizing: border-box; background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 12px; border-radius: 10px; font-size: 14px; font-weight: 600; outline: none; }
+        textarea { width: 100%; box-sizing: border-box; background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 12px; border-radius: 10px; font-size: 13px; outline: none; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; line-height: 1.45; resize: vertical; }
+        details { margin-bottom: 20px; }
+        summary { cursor: pointer; font-size: 10px; font-weight: 800; color: #94a3b8; text-transform: uppercase; margin-bottom: 8px; }
+        summary:hover { color: #64748b; }
+        .hint { font-size: 11px; color: #94a3b8; line-height: 1.5; margin: 8px 0 0; font-weight: 600; }
+        
+        .lesson-block { background: #f8fafc; border-radius: 10px; padding: 15px; margin-top: 10px; border: 1px solid #e2e8f0; }
+        .empty-state { text-align: center; color: #94a3b8; font-size: 13px; padding: 20px; background: #f8fafc; border-radius: 10px; margin-top: 10px; font-weight: bold; }
+        .error-msg { background-color: #fee2e2; color: #dc2626; padding: 15px; border-radius: 10px; font-size: 13px; font-weight: bold; text-align: center; margin-bottom: 20px; line-height: 1.5; }
+        .ok-msg { background-color: #dcfce7; color: #15803d; padding: 15px; border-radius: 10px; font-size: 13px; font-weight: bold; text-align: center; margin-bottom: 20px; }
+        .warn-msg { background-color: #fef3c7; color: #854d0e; padding: 15px; border-radius: 10px; font-size: 13px; font-weight: bold; text-align: center; margin-bottom: 20px; line-height: 1.5; }
+        .footer { text-align: center; font-size: 10px; color: #cbd5e1; margin-top: 35px; text-transform: uppercase; letter-spacing: 1px; }
+        
+        .tag-red { background-color: #fee2e2; color: #dc2626; padding: 4px 8px; border-radius: 5px; font-size: 11px; font-weight: bold; text-transform: uppercase; margin-bottom: 6px; display: inline-block;}
+        .tag-yellow { background-color: #fef08a; color: #854d0e; padding: 4px 8px; border-radius: 5px; font-size: 11px; font-weight: bold; text-transform: uppercase; margin-bottom: 6px; display: inline-block;}
+
+        @media (min-width: 800px) {
+            body { padding: 40px 20px; }
+            .card { margin-top: 0; }
+            .dashboard-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; align-items: start; }
+            .col-controls-top { grid-column: 1; grid-row: 1; }
+            .col-controls-bottom { grid-column: 1; grid-row: 2; }
+            .col-preview { grid-column: 2; grid-row: 1 / span 2; margin-top: 0; margin-bottom: 0; background-color: #f8fafc; padding: 25px; border-radius: 15px; border: 2px dashed #e2e8f0; }
+            .col-preview .section-title { margin-top: 0; }
+            .col-preview .lesson-block { background: white; }
+            .col-preview .empty-state { background: white; }
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="header">
+            <h1>Display-Control</h1>
+            <p>{{ conf.get('ROOM_NAME', 'Unbekannt') }} | Raumanzeige</p>
+        </div>
+        
+        <div class="content">
+            {% if conf|length == 0 %}
+                <div class="error-msg">Konfigurationsfehler! Die Datei 'config.json' konnte nicht gelesen werden.</div>
+            {% endif %}
+
+            {% if save_error %}
+                <div class="error-msg">Nicht gespeichert: {{ save_error }}</div>
+            {% elif save_ok %}
+                <div class="ok-msg">Einstellungen gespeichert.</div>
+            {% endif %}
+
+            {# Ab STALE_ALERT_SECONDS wird aus dem gelben Hinweis eine rote
+               Meldung. Bis dahin ist ein Ausfall Alltag; danach fehlen dem Plan
+               seit Stunden alle Vertretungen, ohne dass man das dem Schild
+               ansieht. Denselben Schwellwert nutzt das Protokoll. #}
+            {% if stale or stoerung_dauer %}
+                <div class="{% if stoerung_lang %}error-msg{% else %}warn-msg{% endif %}">
+                    WebUntis ist derzeit nicht erreichbar{% if stoerung_dauer %} (seit {{ stoerung_dauer }}){% endif %}.<br>
+                    {% if stale %}
+                        Angezeigt wird der zuletzt abgerufene Plan von heute &ndash; kurzfristige
+                        Änderungen können darin fehlen.
+                    {% else %}
+                        Es liegt kein Plan von heute vor, den das Schild ersatzweise anzeigen könnte.
+                    {% endif %}
+                    {% if last_sync %}<br>Letzter erfolgreicher Abruf: {{ last_sync }}{% endif %}
+                    {% if stoerung_lang %}
+                        <br><br>Die Störung dauert bereits länger an.
+                        Bitte Netzwerkverbindung und WebUntis-Zugang prüfen.
+                    {% endif %}
+                </div>
+            {% endif %}
+            
+            <div class="dashboard-grid">
+                
+                <div class="col-controls-top">
+                    <div class="section-title">Gerätesteuerung</div>
+                    <div class="btn-group">
+                        <form action="/update" method="POST" class="inline-form btn-full">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <button type="submit" class="btn btn-update">Manuelles Update</button>
+                        </form>
+                        
+                        <form action="/toggle" method="POST" class="inline-form">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <button type="submit" class="btn {% if conf.get('DISPLAY_ACTIVE', True) %}btn-off{% else %}btn-on{% endif %}">
+                                {% if conf.get('DISPLAY_ACTIVE', True) %}Display aus{% else %}Display an{% endif %}
+                            </button>
+                        </form>
+                        
+                        <form action="/toggle_touch" method="POST" class="inline-form">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <button type="submit" class="btn {% if conf.get('TOUCH_ACTIVE', True) %}btn-off{% else %}btn-on{% endif %}">
+                                {% if conf.get('TOUCH_ACTIVE', True) %}Touch aus{% else %}Touch an{% endif %}
+                            </button>
+                        </form>
+                    </div>
+                    
+                    <div class="section-title">Einstellungen</div>
+                    <form action="/save" method="POST">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <div class="form-group">
+                            <label>Anzeigeraum</label>
+                            <input type="text" name="ROOM_NAME" value="{{ conf.get('ROOM_NAME', '') }}" maxlength="{{ room_max }}" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Intervall (Sekunden, mind. {{ min_interval }})</label>
+                            <input type="number" name="AUTO_UPDATE_SECONDS" value="{{ conf.get('AUTO_UPDATE_SECONDS', 900) }}" min="{{ min_interval }}" max="{{ max_interval }}">
+                        </div>
+
+                        {# Eingeklappt, weil der Stundenplan selten geaendert wird und das
+                           Textfeld sonst die ganze Spalte einnimmt. <details> ist reines
+                           HTML - das Projekt kommt bewusst ohne JavaScript aus. #}
+                        <details>
+                            <summary>Stundenplan bearbeiten</summary>
+                            <textarea name="SCHEDULE" rows="20" spellcheck="false" wrap="off">{{ schedule_text }}</textarea>
+                            <p class="hint">
+                                Alle Uhrzeiten im Format HH:MM. <strong>DAY_START</strong> und
+                                <strong>DAY_END</strong> begrenzen den Schultag,
+                                <strong>LESSONS</strong> sind die Unterrichtsstunden,
+                                <strong>BREAKS</strong> die Pausen. Die Startzeit einer Stunde
+                                muss auf die Minute mit WebUntis übereinstimmen &ndash; nur
+                                darüber findet das Schild den Stundennamen.
+                                Wird etwas nicht angenommen, bleibt der eingegebene Text
+                                erhalten und oben steht, woran es lag.
+                            </p>
+                        </details>
+
+                        <button type="submit" class="btn btn-save">Speichern</button>
+                    </form>
+                </div>
+                
+                <div class="col-preview">
+                    <div class="section-title">Aktuelle Anzeige ({{ conf.get('ROOM_NAME', '') }})</div>
+                    <div>
+                        {% if data and data is mapping and (data.current or data.next) %}
+                            <h4 style="margin: 15px 0 5px 0; font-size: 12px; color: #64748b;">JETZT</h4>
+                            {% if data.current %}
+                                <div class="lesson-block">
+                                    <div style="display: flex; justify-content: space-between; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; margin-bottom: 8px;">
+                                        <strong style="color: #0f172a; font-size: 14px;">{{ data.current.stunde }}</strong>
+                                        <span style="color: #64748b; font-size: 12px; font-weight: bold;">{{ data.current.zeit }}</span>
+                                    </div>
+                                    
+                                    {% if data.current.status_code == 'cancelled' %}<div class="tag-red">Fällt aus</div>
+                                    {% elif data.current.status_code == 'irregular' %}<div class="tag-yellow">Vertretung</div>{% endif %}
+                                    
+                                    <div style="font-size: 16px; font-weight: 800; color: #1e293b; margin-bottom: 4px;">
+                                        {{ data.current.fach_lang if data.current.fach_lang else data.current.fach }} <span style="color: #cbd5e1; margin: 0 4px;">|</span> {{ data.current.klasse }}
+                                    </div>
+                                    <div style="font-size: 12px; color: #475569; font-weight: 600;">Lehrkraft: {{ data.current.lehrer }}</div>
+                                    
+                                    {% if data.current.stunden_info %}
+                                    <div style="margin-top: 8px; padding: 6px 10px; background-color: #e2e8f0; border-radius: 6px; font-size: 11px; color: #334155; border-left: 3px solid #94a3b8;">
+                                        <strong>Info:</strong> {{ data.current.stunden_info }}
+                                    </div>
+                                    {% endif %}
+                                </div>
+                            {% else %}
+                                <div class="empty-state">{{ msg }}</div>
+                            {% endif %}
+
+                            <h4 style="margin: 20px 0 5px 0; font-size: 12px; color: #64748b;">DANACH</h4>
+                            {% if data.next %}
+                                <div class="lesson-block">
+                                    <div style="display: flex; justify-content: space-between; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; margin-bottom: 8px;">
+                                        <strong style="color: #0f172a; font-size: 14px;">{{ data.next.stunde }}</strong>
+                                        <span style="color: #64748b; font-size: 12px; font-weight: bold;">{{ data.next.zeit }}</span>
+                                    </div>
+                                    
+                                    {% if data.next.status_code == 'cancelled' %}<div class="tag-red">Fällt aus</div>
+                                    {% elif data.next.status_code == 'irregular' %}<div class="tag-yellow">Vertretung</div>{% endif %}
+                                    
+                                    <div style="font-size: 16px; font-weight: 800; color: #1e293b; margin-bottom: 4px;">
+                                        {{ data.next.fach_lang if data.next.fach_lang else data.next.fach }} <span style="color: #cbd5e1; margin: 0 4px;">|</span> {{ data.next.klasse }}
+                                    </div>
+                                    <div style="font-size: 12px; color: #475569; font-weight: 600;">Lehrkraft: {{ data.next.lehrer }}</div>
+                                    
+                                    {% if data.next.stunden_info %}
+                                    <div style="margin-top: 8px; padding: 6px 10px; background-color: #e2e8f0; border-radius: 6px; font-size: 11px; color: #334155; border-left: 3px solid #94a3b8;">
+                                        <strong>Info:</strong> {{ data.next.stunden_info }}
+                                    </div>
+                                    {% endif %}
+                                </div>
+                            {% else %}
+                                <div class="empty-state">Kein Unterricht mehr.</div>
+                            {% endif %}
+                            
+                        {% else %}
+                            <div class="empty-state" style="font-size: 16px; padding: 30px 20px;">
+                                {{ msg }}
+                            </div>
+                        {% endif %}
+                    </div>
+                </div>
+                
+                <div class="col-controls-bottom">
+                    <div class="section-title">Test & Simulation</div>
+                    <div style="background: #f8fafc; border-radius: 10px; padding: 15px; margin-bottom: 15px; border: 1px solid #e2e8f0;">
+                        <label>Datum & Uhrzeit simulieren</label>
+                        <form action="/simulate_time" method="POST" style="margin-bottom: 10px;">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <input type="datetime-local" name="SIM_TIME" required style="margin-bottom: 10px;">
+                            <button type="submit" class="btn btn-test">Zeit simulieren</button>
+                        </form>
+                        <form action="/reset_time" method="POST" class="inline-form">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <button type="submit" class="btn btn-update">Zurück zur Echtzeit</button>
+                        </form>
+                    </div>
+                    
+                    <div class="btn-group">
+                        <form action="/demo" method="POST" class="inline-form btn-full">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <button type="submit" class="btn btn-demo">Lokale Dummy-Daten laden</button>
+                        </form>
+                        <form action="/test_all" method="POST" class="inline-form btn-full">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <button type="submit" class="btn btn-test" style="background-color: #0f172a;">Display-Testlauf (ca. 30 Sek)</button>
+                        </form>
+                    </div>
+
+                    <div class="section-title">System</div>
+                    <div class="btn-group">
+                        <!-- Die onsubmit Methode wirft vorher noch einen JavaScript-Confirm-Dialog aus -->
+                        <form action="/sys_reboot" method="POST" class="inline-form btn-full" onsubmit="return confirm('Raspberry Pi wirklich neu starten? Das E-Paper wird kurz abgeschaltet.');">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <button type="submit" class="btn btn-test" style="background-color: #475569;">System Neustart</button>
+                        </form>
+                        <form action="/sys_shutdown" method="POST" class="inline-form btn-full" onsubmit="return confirm('ACHTUNG: Raspberry Pi wirklich herunterfahren? Er muss danach manuell vom Strom getrennt und wieder verbunden werden, um neu zu starten!');">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <button type="submit" class="btn btn-off" style="background-color: #94a3b8; color: #0f172a;">System Herunterfahren</button>
+                        </form>
+                    </div>
+                </div>
+
+            </div>
+            
+            <p class="footer">Status: {{ now }}{% if sim_active %} <br><strong style="color: #dc2626;">(ZEIT WIRD SIMULIERT)</strong>{% endif %}</p>
+        </div>
+    </div>
+</body>
+</html>

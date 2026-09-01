@@ -56,6 +56,30 @@ MIN_UPDATE_SECONDS = 300        # 5 Minuten
 MAX_UPDATE_SECONDS = 86400      # 24 Stunden
 DEFAULT_UPDATE_SECONDS = 900    # 15 Minuten
 
+# Grenzen fuer den Raumnamen aus dem Web-Formular.
+# Der Name geht als Suchbegriff an WebUntis und steht in der Kopfzeile des
+# Displays. Ein leerer Name laesst das Schild ohne erkennbaren Grund
+# "Raum None fehlt." melden; ein sehr langer schiebt die Uhrzeit aus der
+# Kopfzeile. Beides faellt erst am Geraet auf - deshalb wird schon beim
+# Speichern geprueft.
+ROOM_NAME_MAX_LEN = 40
+
+# Grenzen fuer den Stundenplan aus dem Web-Formular. Sie halten Tippfehler
+# ("800" statt "8:00") und versehentlich eingefuegte Datenmengen ab, bevor sie
+# in der config.json landen.
+DEFAULT_DAY_START = "07:55"
+DEFAULT_DAY_END = "15:30"
+SCHEDULE_MAX_LESSONS = 20       # mehr Stunden hat kein Schultag
+SCHEDULE_MAX_BREAKS = 12
+SCHEDULE_NAME_MAX_LEN = 30      # "Mittagspause" braucht 12 Zeichen
+
+# Ab dieser Dauer gilt eine Stoerung als laenger andauernd. Bis dahin ist ein
+# Ausfall Alltag (WLAN-Aussetzer, Wartungsfenster bei WebUntis) und nur eine
+# Randnotiz. Danach wird es ein Fall fuer die Betreuung: Der angezeigte Plan
+# ist zwar noch der von heute, kurzfristige Aenderungen fehlen aber seit
+# Stunden - und das sieht man dem Schild nicht an.
+STALE_ALERT_SECONDS = 3 * 3600  # 3 Stunden
+
 # Fehlermeldungen, die auf eine *vorübergehende* Störung hindeuten (Netz/Server).
 # Nur bei diesen greifen wir auf den zuletzt abgerufenen Tagesplan zurück.
 # Konfigurationsfehler (falsches Passwort, fehlender Raum) sind dagegen dauerhaft

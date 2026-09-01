@@ -63,6 +63,21 @@ def test_treiberpfad_landet_im_suchpfad():
         assert konstanten.WAVESHARE_LIB in sys.path
 
 
+def test_die_html_vorlage_liegt_dort_wo_flask_sie_sucht():
+    """
+    Die Vorlage stand frueher als Zeichenkette in web.py. Als eigene Datei
+    haengt sie nun daran, dass Flask sie findet: Das Vorlagenverzeichnis
+    richtet sich nach dem Paket, in dem Flask() aufgerufen wurde. Ein
+    verschobenes oder umbenanntes Verzeichnis faellt sonst erst beim ersten
+    Aufruf der Seite auf - mit einem Serverfehler statt des Dashboards.
+    """
+    from tuerschild import web
+    erwartet = os.path.join(os.path.dirname(os.path.abspath(web.__file__)),
+                            "templates", web.DASHBOARD_VORLAGE)
+    assert os.path.isfile(erwartet)
+    assert web.app.jinja_env.get_or_select_template(web.DASHBOARD_VORLAGE)
+
+
 def test_einstiegspunkt_liegt_neben_dem_paket():
     """raumanzeige.py wird von start.sh und vom systemd-Dienst aufgerufen."""
     assert os.path.isfile(os.path.join(projektverzeichnis(), "raumanzeige.py"))

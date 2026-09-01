@@ -30,21 +30,27 @@ from .konstanten import (BACKGROUND_ERROR_PAUSE, DEFAULT_UPDATE_SECONDS,
                          FAILED_LOGIN_TTL, HOLIDAYS_CACHE_SECONDS,
                          LOGIN_LOCKOUT_SECONDS, MAX_LOGIN_ATTEMPTS,
                          MAX_UPDATE_SECONDS, MIN_UPDATE_SECONDS,
-                         PROJEKT_VERZEICHNIS, SIMULATION_MAX_SECONDS,
-                         STATUS_LABELS, TOUCH_COOLDOWN, TOUCH_I2C_ADDR,
-                         TOUCH_RST_PIN, TRANSIENT_ERRORS, TRUSTED_PROXIES,
+                         PROJEKT_VERZEICHNIS, ROOM_NAME_MAX_LEN,
+                         SCHEDULE_MAX_BREAKS, SCHEDULE_MAX_LESSONS,
+                         SCHEDULE_NAME_MAX_LEN, SIMULATION_MAX_SECONDS,
+                         STALE_ALERT_SECONDS, STATUS_LABELS, TOUCH_COOLDOWN,
+                         TOUCH_I2C_ADDR, TOUCH_RST_PIN, TRANSIENT_ERRORS,
+                         TRUSTED_PROXIES,
                          UI_BADGE_GAP, UI_BADGE_PADDING, UI_ELLIPSIS,
                          UI_HEADER_HEIGHT, UI_HEIGHT, UI_LINE_Y, UI_MARGIN,
                          UI_WIDTH, WAVESHARE_LIB)
 from .zustand import AppState, Lesson, TimedLesson, app_state
-from .konfiguration import (CONFIG_FILE, get_cached_config, get_now,
-                            get_update_interval, save_config)
+from .konfiguration import (CONFIG_FILE, formatiere_dauer,
+                            formatiere_stundenplan, get_cached_config, get_now,
+                            get_update_interval, pruefe_raumname,
+                            pruefe_stundenplan, save_config)
 from .hardware import (check_touch_via_i2c, clear_display_once,
                        clear_touch_interrupt_via_i2c, init_fonts)
 from .anzeige import (build_detail_line, draw_lesson_block, get_text_width,
                       truncate_to_width, update_display_logic)
 from .untis import (get_current_lesson, get_offline_fallback, parse_lesson,
                     resolve_timetable, select_lessons)
-from .steuerung import background_loop, run_display_test_sequence
+from .steuerung import (background_loop, melde_stoerungsdauer,
+                        run_display_test_sequence)
 from .web import (app, check_auth, cleanup_failed_logins, get_client_ip,
                   get_local_ip)
