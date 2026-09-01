@@ -89,6 +89,9 @@ def test_der_neustart_ist_die_leisere_warnung(webclient):
 # ==============================================================================
 def leuchtdichte(farbe):
     """Relative Helligkeit nach WCAG."""
+    farbe = farbe.lstrip("#")
+    if len(farbe) == 3:
+        farbe = "".join(z * 2 for z in farbe)
     werte = []
     for anteil in (farbe[0:2], farbe[2:4], farbe[4:6]):
         c = int(anteil, 16) / 255
@@ -102,29 +105,113 @@ def kontrast(vordergrund, hintergrund):
     return (hell + 0.05) / (dunkel + 0.05)
 
 
-def farbe(regel, eigenschaft="color"):
-    treffer = re.search(re.escape(regel) + r" \{[^}]*" + eigenschaft
-                        + r": #([0-9a-fA-F]{6})", vorlage())
-    assert treffer, f"'{regel}' hat keine Angabe fuer {eigenschaft} mehr"
-    return treffer.group(1)
-
-
-def test_die_statuszeile_ist_lesbar():
+def farbtafel():
     """
-    Sie sitzt in der dunklen Kopfzeile und traegt neben dem Zeitstempel den
-    Hinweis auf eine laufende Zeitsimulation. Gefordert sind 4,5:1.
+    Liest die beiden Wertesaetze aus dem Stylesheet: den hellen aus ':root'
+    und den dunklen aus der Regel fuer prefers-color-scheme.
 
-    Beide Farben kommen aus dem Stylesheet. Wuerde der Test den Hintergrund
-    annehmen, ginge er beim naechsten Umbau der Kopfzeile stillschweigend von
-    einer falschen Rechnung aus.
+    Geprueft werden muessen BEIDE. Ein Dunkelmodus, in dem die Schrift auf
+    ihrem Grund verschwindet, faellt beim Entwickeln nicht auf - man sieht ja
+    das Schema, das der eigene Rechner gerade eingestellt hat.
     """
-    grund = farbe(".header", "background-color")
+    quelle = vorlage()
+    bloecke = re.findall(r":root \{(.*?)\n        \}", quelle, re.DOTALL)
+    assert len(bloecke) >= 2, "Es gibt keinen zweiten Wertesatz fuer den Dunkelmodus"
 
-    for regel in (".kopf-status", ".kopf-status .simuliert"):
-        wert = kontrast(farbe(regel), grund)
-        assert wert >= 4.5, (
-            f"Kontrast von {regel} nur {wert:.1f}:1 - gefordert sind 4,5:1"
-        )
+    def werte(block):
+        return dict(re.findall(r"(--[a-z-]+):\s*(#[0-9a-fA-F]{3,6})", block))
+
+    hell = werte(bloecke[0])
+    dunkel = {**hell, **werte(bloecke[1])}
+    assert hell, "Die Farbtafel ist leer"
+    return {"hell": hell, "dunkel": dunkel}
+
+
+# Paare aus Schrift- und Hintergrundfarbe, wie sie im Stylesheet zusammen
+# benutzt werden. Sie sind hier bewusst aufgezaehlt: So steht an einer Stelle,
+# welche Kombination ueberhaupt vorkommen soll.
+PAARE = [
+    ("--text", "--karte", "Fließtext auf der Karte"),
+    ("--text-leise", "--karte", "Abschnittsüberschriften"),
+    ("--wert", "--karte", "Werte in der Kurzübersicht"),
+    ("--warnton", "--karte", "Warnung in der Kurzübersicht"),
+    ("--kopf-text", "--kopf", "Zeitstempel in der Kopfzeile"),
+    ("--kopf-warn", "--kopf", "Hinweis auf die Zeitsimulation"),
+    ("--text", "--feld", "Eingabefelder"),
+    ("--text-leise", "--feld", "Beschriftungen auf hellem Feld"),
+    ("--haupt-schrift", "--haupt-grund", "Knopf: Hauptaktion"),
+    ("--neutral-schrift", "--neutral-grund", "Knopf: neutral"),
+    ("--test-schrift", "--test-grund", "Knopf: Test"),
+    ("--gefahr-schrift", "--gefahr-grund", "Knopf: Gefahr"),
+    ("--gefahr-leise-schrift", "--gefahr-leise-grund", "Knopf: Neustart"),
+    ("--fehler-schrift", "--fehler-grund", "Fehlermeldung"),
+    ("--ok-schrift", "--ok-grund", "Bestätigung"),
+    ("--warn-schrift", "--warn-grund", "Warnmeldung"),
+]
+
+
+@pytest.mark.parametrize("schema", ["hell", "dunkel"])
+def test_alle_farbpaare_sind_lesbar(schema):
+    """
+    Der Kontrast muss in beiden Schemata reichen, nicht nur in dem, das
+    zufaellig auf dem eigenen Rechner eingestellt ist.
+
+    Dieser Test hat beim Einbau des Dunkelmodus gleich etwas gefunden, das es
+    vorher schon gab: Weisse Schrift auf dem bernsteinfarbenen Knopf ergibt
+    nur 2,2:1. Sie ist jetzt dunkel.
+    """
+    tafel = farbtafel()[schema]
+    maengel = []
+    for schrift, grund, wofuer in PAARE:
+        assert schrift in tafel, f"Farbe {schrift} fehlt im Schema '{schema}'"
+        assert grund in tafel, f"Farbe {grund} fehlt im Schema '{schema}'"
+        wert = kontrast(tafel[schrift], tafel[grund])
+        if wert < 4.5:
+            maengel.append(f"{wofuer}: {wert:.1f}:1 ({schrift} auf {grund})")
+
+    assert not maengel, "Zu geringer Kontrast im Schema '%s':\n  %s" % (
+        schema, "\n  ".join(maengel))
+
+
+def test_jede_gepruefte_farbe_wird_auch_benutzt():
+    """
+    Gegenprobe: Die Liste oben duerfte sonst Farben pruefen, die im
+    Stylesheet gar nicht mehr vorkommen - der Test waere gruen fuer nichts.
+    """
+    quelle = vorlage()
+    unbenutzt = {name for paar in PAARE for name in paar[:2]
+                 if f"var({name})" not in quelle}
+    assert not unbenutzt, f"Geprüft, aber nirgends benutzt: {sorted(unbenutzt)}"
+
+
+def test_der_browser_erfaehrt_vom_dunkelmodus(webclient):
+    """
+    'color-scheme' betrifft die Bedienelemente, die der Browser selbst malt -
+    beim Tuerschild das Feld fuer Datum und Uhrzeit. Ohne die Angabe bleibt es
+    weiss und blendet mitten auf der dunklen Seite.
+
+    Das faellt nur auf, wenn man das Feld im dunklen Schema wirklich ansieht.
+    """
+    inhalt = seite(webclient)
+    assert 'name="color-scheme" content="light dark"' in inhalt
+    assert "color-scheme: light dark" in vorlage()
+
+
+def test_das_stylesheet_kennt_keine_festen_farben_mehr():
+    """
+    Ausserhalb der Farbtafel darf keine Farbe stehen - sonst bliebe sie im
+    Dunkelmodus, wie sie ist, und niemand bemerkt es.
+    """
+    quelle = vorlage()
+    stil = quelle[quelle.index("<style>"):quelle.index("</style>")]
+    # Alles ab dem Ende der dunklen Regel
+    regeln = stil[stil.index("@media (prefers-color-scheme: dark)"):]
+    regeln = regeln[regeln.index("\n        }\n"):]
+
+    treffer = [z.strip() for z in regeln.split("\n")
+               if re.search(r"(color|background)[^;]*#[0-9a-fA-F]{3}", z)
+               and not z.strip().startswith(("/*", "*", "--"))]
+    assert not treffer, f"Feste Farbe ausserhalb der Farbtafel: {treffer}"
 
 
 def test_der_zeitstempel_steht_in_der_kopfzeile(webclient):

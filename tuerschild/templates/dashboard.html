@@ -3,12 +3,98 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
     <title>Türschild-Admin</title>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f1f5f9; color: #1e293b; margin: 0; padding: 15px; display: flex; justify-content: center; }
-        .card { background: white; max-width: 950px; width: 100%; border-radius: 20px; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1); overflow: hidden; margin-top: 10px; margin-bottom: 20px; }
+        /* ==================================================================
+           FARBTAFEL
+           ==================================================================
+           Alle Farben stehen als Variablen an einer Stelle. Der Dunkelmodus
+           ist dann nur noch ein zweiter Satz Werte - im Stylesheet darunter
+           kommt keine einzige Farbe mehr doppelt vor.
+
+           Welches Schema gilt, entscheidet das Betriebssystem
+           (prefers-color-scheme). Einen Schalter auf der Seite gibt es
+           bewusst nicht: Er muesste seine Einstellung irgendwo merken, und
+           wer nachts am Telefon nachsieht, hat sein Geraet ohnehin schon
+           dunkel gestellt.
+
+           Die Paare aus Text- und Hintergrundfarbe werden in
+           tests/test_oberflaeche.py auf Kontrast geprueft - in beiden
+           Schemata, nicht nur im hellen.
+           ================================================================== */
+        :root {
+            /* Damit auch die Bedienelemente des Browsers (etwa das Feld fuer
+               Datum und Uhrzeit) dem Schema folgen. */
+            color-scheme: light dark;
+
+            --grund: #f1f5f9;          /* Seitenhintergrund */
+            --karte: #ffffff;          /* die Karte darauf */
+            --kopf: #0f172a;           /* Kopfzeile */
+            --text: #1e293b;
+            /* Gedaempfter Text - fuer Abschnittsueberschriften ebenso wie
+               fuer Feldbeschriftungen. Frueher waren das zwei Toene; der
+               hellere (#94a3b8) ergab auf Weiss aber nur 2,6:1, und bei
+               10px fetter Schrift gilt die strengere Grenze von 4,5:1. */
+            --text-leise: #64748b;
+            --linie: #e2e8f0;
+            --feld: #f8fafc;           /* Eingabefelder, Vorschau-Spalte */
+            --wert: #334155;           /* Werte in der Kurzuebersicht */
+            --warnton: #b45309;        /* ebenda, wenn etwas nicht stimmt */
+
+            --kopf-text: #94a3b8;
+            --kopf-warn: #f87171;
+
+            /* Die vier Knopfrollen, je als Paar aus Grund und Schrift.
+               Bernstein bekommt DUNKLE Schrift: Weiss darauf ergibt nur
+               2,2:1 und war schlecht lesbar. */
+            --haupt-grund: #0f172a;      --haupt-schrift: #ffffff;
+            --neutral-grund: #475569;    --neutral-schrift: #ffffff;
+            --test-grund: #f59e0b;       --test-schrift: #0f172a;
+            --gefahr-grund: #dc2626;     --gefahr-schrift: #ffffff;
+            --gefahr-leise-grund: #ffffff;
+            --gefahr-leise-schrift: #dc2626;
+            --gefahr-leise-rand: #fecaca;
+
+            --punkt-an: #4ade80;
+            --punkt-aus: #cbd5e1;
+
+            --fehler-grund: #fee2e2;   --fehler-schrift: #b91c1c;
+            --ok-grund: #dcfce7;       --ok-schrift: #15803d;
+            --warn-grund: #fef3c7;     --warn-schrift: #854d0e;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --grund: #0f172a;
+                --karte: #1e293b;
+                --kopf: #020617;
+                --text: #e2e8f0;
+                --text-leise: #94a3b8;
+                --linie: #334155;
+                --feld: #0f172a;
+                --wert: #e2e8f0;
+                --warnton: #fbbf24;
+
+                /* Die Hauptaktion kehrt sich um: Ein fast schwarzer Knopf
+                   waere auf dunklem Grund nicht mehr zu sehen. */
+                --haupt-grund: #e2e8f0;      --haupt-schrift: #0f172a;
+                --neutral-grund: #334155;    --neutral-schrift: #e2e8f0;
+                --gefahr-leise-grund: #1e293b;
+                --gefahr-leise-schrift: #f87171;
+                --gefahr-leise-rand: #7f1d1d;
+
+                --punkt-aus: #64748b;
+
+                --fehler-grund: #450a0a;   --fehler-schrift: #fca5a5;
+                --ok-grund: #052e16;       --ok-schrift: #86efac;
+                --warn-grund: #422006;     --warn-schrift: #fcd34d;
+            }
+        }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: var(--grund); color: var(--text); margin: 0; padding: 15px; display: flex; justify-content: center; }
+        .card { background: var(--karte); max-width: 950px; width: 100%; border-radius: 20px; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1); overflow: hidden; margin-top: 10px; margin-bottom: 20px; }
         
-        .header { background-color: #0f172a; color: white; padding: 30px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 12px; }
+        .header { background-color: var(--kopf); color: var(--kopf-text); padding: 30px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 12px; }
         .header h1 { margin: 0; font-size: 24px; letter-spacing: -1px; text-transform: uppercase; }
         .header p { margin: 5px 0 0; opacity: 0.6; font-size: 12px; font-weight: bold; }
 
@@ -17,14 +103,14 @@
            Die Farben sind fuer den dunklen Grund gewaehlt: #94a3b8 ergibt
            dort 7,0:1, das helle Rot 6,5:1. Das kraeftige #dc2626 der uebrigen
            Warnungen kaeme auf diesem Grund nur auf 3,7:1. */
-        .kopf-status { font-size: 11px; font-weight: bold; color: #94a3b8; letter-spacing: 0.5px; }
-        .kopf-status .simuliert { display: block; margin-top: 4px; color: #f87171; text-transform: uppercase; }
+        .kopf-status { font-size: 11px; font-weight: bold; color: var(--kopf-text); letter-spacing: 0.5px; }
+        .kopf-status .simuliert { display: block; margin-top: 4px; color: var(--kopf-warn); text-transform: uppercase; }
         .content { padding: 30px; }
         
         .dashboard-grid { display: flex; flex-direction: column; gap: 0; }
         .col-preview { margin-top: 20px; margin-bottom: 20px; }
         
-        .section-title { font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; margin: 30px 0 15px 0; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px; letter-spacing: 0.5px; }
+        .section-title { font-size: 11px; font-weight: 800; color: var(--text-leise); text-transform: uppercase; margin: 30px 0 15px 0; border-bottom: 2px solid var(--linie); padding-bottom: 8px; letter-spacing: 0.5px; }
         .section-title:first-child { margin-top: 0; }
         /* Der Systemblock ist ab 800px ein eigener Kasten und dort das erste
            Kind - untereinander braucht seine Ueberschrift aber ihren Abstand. */
@@ -33,7 +119,7 @@
         form.inline-form { margin: 0; }
         .btn-group { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; }
         .btn-full { grid-column: span 2; }
-        .btn { width: 100%; box-sizing: border-box; display: block; text-decoration: none; text-align: center; padding: 15px; border-radius: 12px; font-weight: bold; color: white; transition: transform 0.1s; border: none; cursor: pointer; font-size: 14px;}
+        .btn { width: 100%; box-sizing: border-box; display: block; text-decoration: none; text-align: center; padding: 15px; border-radius: 12px; font-weight: bold; transition: transform 0.1s; border: none; cursor: pointer; font-size: 14px;}
         .btn:active { transform: scale(0.98); }
 
         /* ------------------------------------------------------------------
@@ -56,9 +142,9 @@
            Farbe. tests/test_oberflaeche.py haelt fest, dass keine weiteren
            Farben dazukommen.
            ------------------------------------------------------------------ */
-        .btn-haupt { background-color: #0f172a; }
-        .btn-neutral { background-color: #475569; }
-        .btn-test { background-color: #f59e0b; }
+        .btn-haupt { background-color: var(--haupt-grund); color: var(--haupt-schrift); }
+        .btn-neutral { background-color: var(--neutral-grund); color: var(--neutral-schrift); }
+        .btn-test { background-color: var(--test-grund); color: var(--test-schrift); }
 
         /* Schalter fuer Display und Touch. Bewusst NEUTRAL, nicht rot:
            Beides ist mit einem Klick rueckgaengig zu machen. Frueher war der
@@ -67,43 +153,44 @@
            Aktion, nach der jemand zum Geraet laufen und es vom Strom trennen
            muss, unauffaellig aussah. */
         .punkt { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 7px; vertical-align: 1px; }
-        .punkt-an { background-color: #4ade80; }
-        .punkt-aus { background-color: #cbd5e1; }
+        .punkt-an { background-color: var(--punkt-an); }
+        .punkt-aus { background-color: var(--punkt-aus); }
 
         /* Rot ist ab hier den Aktionen vorbehalten, die den Betrieb beenden.
            Herunterfahren ist die schwerere von beiden und daher gefuellt,
            Neustart nur umrandet. */
-        .btn-gefahr { background-color: #dc2626; }
-        .btn-gefahr-leise { background-color: white; color: #dc2626; border: 2px solid #fecaca; }
+        .btn-gefahr { background-color: var(--gefahr-grund); color: var(--gefahr-schrift); }
+        .btn-gefahr-leise { background-color: var(--gefahr-leise-grund); color: var(--gefahr-leise-schrift); border: 2px solid var(--gefahr-leise-rand); }
         .btn-save { font-size: 16px; margin-top: 5px; }
         
         .form-group { margin-bottom: 20px; }
-        label { display: block; font-size: 10px; font-weight: 800; color: #94a3b8; text-transform: uppercase; margin-bottom: 5px; }
-        input { width: 100%; box-sizing: border-box; background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 12px; border-radius: 10px; font-size: 14px; font-weight: 600; outline: none; }
+        label { display: block; font-size: 10px; font-weight: 800; color: var(--text-leise); text-transform: uppercase; margin-bottom: 5px; }
+        input { width: 100%; box-sizing: border-box; background-color: var(--feld); color: var(--text); border: 1px solid var(--linie); padding: 12px; border-radius: 10px; font-size: 14px; font-weight: 600; outline: none; }
         
         /* Kurzuebersicht unter der Vorschau. Sie fuellt nicht nur die Flaeche,
            die rechts frei bleibt, wenn gerade kein Unterricht ist - sie
            beantwortet auch die Fragen, die man beim Blick auf das Dashboard
            tatsaechlich hat: Wie alt sind die Daten, und geht die Uhr richtig? */
-        .status-liste { margin-top: 20px; border-top: 1px solid #e2e8f0; padding-top: 8px; }
+        .status-liste { margin-top: 20px; border-top: 1px solid var(--linie); padding-top: 8px; }
         .status-liste div { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; padding: 6px 0; }
-        .status-liste dt { color: #94a3b8; font-weight: 700; }
-        .status-liste dd { color: #334155; font-weight: 700; margin: 0; text-align: right; }
+        .status-liste dt { color: var(--text-leise); font-weight: 700; }
+        .status-liste dd { color: var(--wert); font-weight: 700; margin: 0; text-align: right; }
         /* Muss spezifischer sein als ".status-liste dd" (Klasse + Element),
            sonst gewinnt dort die graue Grundfarbe und die Warnung faellt aus. */
-        .status-liste dd.status-warn { color: #b45309; }
+        .status-liste dd.status-warn { color: var(--warnton); }
 
         /* Rahmen um die Vorschau. Das Bild ist ein echtes 1-Bit-Bitmap in
            250x122 - also winzig. Es wird auf die Spaltenbreite hochskaliert;
            "pixelated" verhindert dabei das Weichzeichnen, sonst saehe die
            Vorschau schaerfer und sauberer aus als das Schild in Wirklichkeit. */
-        .panel { background: #0f172a; padding: 10px; border-radius: 10px; }
+        .panel { background: var(--kopf); padding: 10px; border-radius: 10px; }
         .panel img { display: block; width: 100%; height: auto; image-rendering: pixelated; background: white; border-radius: 3px; }
-        .panel-hinweis { font-size: 11px; color: #94a3b8; text-align: center; margin: 8px 0 0; font-weight: 600; }
+        .sim-kasten { background: var(--feld); border-radius: 10px; padding: 15px; margin-bottom: 15px; border: 1px solid var(--linie); }
+        .panel-hinweis { font-size: 11px; color: var(--text-leise); text-align: center; margin: 8px 0 0; font-weight: 600; }
 
-        .error-msg { background-color: #fee2e2; color: #dc2626; padding: 15px; border-radius: 10px; font-size: 13px; font-weight: bold; text-align: center; margin-bottom: 20px; line-height: 1.5; }
-        .ok-msg { background-color: #dcfce7; color: #15803d; padding: 15px; border-radius: 10px; font-size: 13px; font-weight: bold; text-align: center; margin-bottom: 20px; }
-        .warn-msg { background-color: #fef3c7; color: #854d0e; padding: 15px; border-radius: 10px; font-size: 13px; font-weight: bold; text-align: center; margin-bottom: 20px; line-height: 1.5; }
+        .error-msg { background-color: var(--fehler-grund); color: var(--fehler-schrift); padding: 15px; border-radius: 10px; font-size: 13px; font-weight: bold; text-align: center; margin-bottom: 20px; line-height: 1.5; }
+        .ok-msg { background-color: var(--ok-grund); color: var(--ok-schrift); padding: 15px; border-radius: 10px; font-size: 13px; font-weight: bold; text-align: center; margin-bottom: 20px; }
+        .warn-msg { background-color: var(--warn-grund); color: var(--warn-schrift); padding: 15px; border-radius: 10px; font-size: 13px; font-weight: bold; text-align: center; margin-bottom: 20px; line-height: 1.5; }
         
 
         @media (min-width: 800px) {
@@ -129,7 +216,7 @@
                Jetzt teilen sich Bedienung und Vorschau die erste Zeile, und
                Test und System stehen nebeneinander in der zweiten. */
             .col-controls-top { grid-column: 1; grid-row: 1; }
-            .col-preview { grid-column: 2; grid-row: 1; margin-top: 0; margin-bottom: 0; background-color: #f8fafc; padding: 25px; border-radius: 15px; border: 2px dashed #e2e8f0; }
+            .col-preview { grid-column: 2; grid-row: 1; margin-top: 0; margin-bottom: 0; background-color: var(--feld); padding: 25px; border-radius: 15px; border: 2px dashed var(--linie); }
             .col-controls-bottom { grid-column: 1 / span 2; grid-row: 2; display: grid; grid-template-columns: 1fr 1fr; gap: 40px; align-items: start; }
             .block-system .section-title { margin-top: 0; }
             .col-preview .section-title { margin-top: 0; }
@@ -259,7 +346,7 @@
                 <div class="col-controls-bottom">
                   <div class="block-test">
                     <div class="section-title">Test & Simulation</div>
-                    <div style="background: #f8fafc; border-radius: 10px; padding: 15px; margin-bottom: 15px; border: 1px solid #e2e8f0;">
+                    <div class="sim-kasten">
                         <label>Datum & Uhrzeit simulieren</label>
                         <form action="/simulate_time" method="POST" style="margin-bottom: 10px;">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
