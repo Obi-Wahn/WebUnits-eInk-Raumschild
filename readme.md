@@ -135,6 +135,28 @@ Gestartet wird weiterhin über `raumanzeige.py` im Projektverzeichnis — dort s
 
 *Hinweis für Änderungen:* Soll in Tests eine Funktion ersetzt werden, muss das im **definierenden** Modul geschehen (etwa `tuerschild.hardware.epd2in13_V3`). Die Sammel-Importe in `tuerschild/__init__.py` sind Kopien der Verweise; ein Ersetzen dort träfe nur diese Kopie.
 
+### **Stundenraster aus WebUntis übernehmen**
+
+Die Zeiten unter `SCHEDULE` müssen nicht abgetippt werden — WebUntis kennt den Zeitraster der Schule und gibt ihn über die Schnittstelle heraus (`getTimegridUnits`). Das Hilfsmittel `stundenraster_auslesen.py` holt ihn und schlägt daraus einen fertigen Block vor:
+
+```bash
+source webuntis/bin/activate
+python3 stundenraster_auslesen.py
+```
+
+Es zeigt zunächst, was pro Wochentag hinterlegt ist, und gibt dann den `SCHEDULE`-Block zum Hineinkopieren aus. **Gespeichert wird nichts** — was übernommen wird, entscheidet ein Mensch. Alles landet zusätzlich in `stundenraster_bericht.txt`; die Datei enthält keine Zugangsdaten und lässt sich bei Problemen weitergeben.
+
+Zwei Dinge kommen dabei nicht aus WebUntis:
+
+* **Die Namen der Pausen.** WebUntis kennt keine „Mittagspause", dort steht überall „Pause".
+* **Der Vorlauf von `DAY_START`.** Er ist eine bewusste Zugabe — bis dahin zeigt das Schild „Guten Morgen!". Einstellbar über `--vorlauf`.
+
+Auch die **Namen der Stunden** sind einen Blick wert: Viele Schulen benennen die Einheiten schlicht `"1"` bis `"8"`. Auf dem Display steht der Name in der Kopfzeile des Blocks, dort ist `"1. Std."` deutlich lesbarer. In dem Fall lohnt es, die Zeiten zu übernehmen und die Namen zu behalten.
+
+Zu beachten: Der Raster ist in WebUntis **pro Wochentag** hinterlegt, `SCHEDULE` kennt dagegen nur ein Tagesmuster. Unterscheiden sich die Tage, weist das Skript darauf hin; mit `--tag freitag` lässt sich ein anderer Tag zugrunde legen.
+
+*Das Türschild selbst ruft den Raster nicht ab.* `SCHEDULE` wird gerade dann gebraucht, wenn WebUntis nicht erreichbar ist — käme es aus dem Netz, stünde das Gerät beim ersten Start ohne Verbindung ohne Plan da. Aus demselben Grund ist das Skript eigenständig: Es bindet das Paket nicht ein und fasst deshalb auch keine Hardware an, läuft also gefahrlos bei arbeitendem Türschild.
+
 ## **🔄 Aktualisieren**
 
 Ein neuer Programmstand wird mit `update.sh` eingespielt:

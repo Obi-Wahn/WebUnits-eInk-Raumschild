@@ -15,6 +15,9 @@ venv/
 # Logs
 *.log
 
+# Bericht von stundenraster_auslesen.py (enthaelt Servername und Schulkuerzel)
+stundenraster_bericht.txt
+
 # Waveshare Hardware-Treiber (wird per git clone separat installiert)
 e-Paper/
 
