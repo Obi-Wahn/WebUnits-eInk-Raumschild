@@ -35,9 +35,30 @@
         .btn-full { grid-column: span 2; }
         .btn { width: 100%; box-sizing: border-box; display: block; text-decoration: none; text-align: center; padding: 15px; border-radius: 12px; font-weight: bold; color: white; transition: transform 0.1s; border: none; cursor: pointer; font-size: 14px;}
         .btn:active { transform: scale(0.98); }
-        .btn-update { background-color: #007BFF; } 
-        .btn-demo { background-color: #6f42c1; } 
-        .btn-test { background-color: #f59e0b; }    
+
+        /* ------------------------------------------------------------------
+           FARBEN NACH ROLLE, NICHT NACH KNOPF
+           Vorher standen hier sieben Farben aus zwei verschiedenen Systemen:
+           #007BFF, #6f42c1, #DC3545 und #28A745 stammen aus Bootstrap, der
+           Rest aus der Slate-Palette, die die uebrige Seite benutzt. Jeder
+           Knopf hatte seine eigene Farbe, und aus der Farbe liess sich nichts
+           ableiten. Genau das laesst eine sonst aufgeraeumte Seite
+           zusammengewuerfelt wirken.
+
+           Es bleiben vier Rollen, drei davon aus derselben Slate-Reihe:
+
+             btn-haupt     die Hauptaktion des Abschnitts
+             btn-neutral   harmlose Nebenaktion, jederzeit umkehrbar
+             btn-test      greift sichtbar ins Geraet ein, aber voruebergehend
+             btn-gefahr    beendet den Betrieb
+
+           Wer einen Knopf hinzufuegt, waehlt also eine Rolle statt einer
+           Farbe. tests/test_oberflaeche.py haelt fest, dass keine weiteren
+           Farben dazukommen.
+           ------------------------------------------------------------------ */
+        .btn-haupt { background-color: #0f172a; }
+        .btn-neutral { background-color: #475569; }
+        .btn-test { background-color: #f59e0b; }
 
         /* Schalter fuer Display und Touch. Bewusst NEUTRAL, nicht rot:
            Beides ist mit einem Klick rueckgaengig zu machen. Frueher war der
@@ -45,7 +66,6 @@
            Warnfarbe sass also auf der harmlosen Schaltflaeche, waehrend die
            Aktion, nach der jemand zum Geraet laufen und es vom Strom trennen
            muss, unauffaellig aussah. */
-        .btn-schalter { background-color: #475569; }
         .punkt { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 7px; vertical-align: 1px; }
         .punkt-an { background-color: #4ade80; }
         .punkt-aus { background-color: #cbd5e1; }
@@ -55,7 +75,7 @@
            Neustart nur umrandet. */
         .btn-gefahr { background-color: #dc2626; }
         .btn-gefahr-leise { background-color: white; color: #dc2626; border: 2px solid #fecaca; }
-        .btn-save { background-color: #0f172a; width: 100%; font-size: 16px; margin-top: 5px; color: white; padding: 15px; border-radius: 12px; font-weight: bold; }
+        .btn-save { font-size: 16px; margin-top: 5px; }
         
         .form-group { margin-bottom: 20px; }
         label { display: block; font-size: 10px; font-weight: 800; color: #94a3b8; text-transform: uppercase; margin-bottom: 5px; }
@@ -85,6 +105,16 @@
         @media (min-width: 800px) {
             body { padding: 40px 20px; }
             .card { margin-top: 0; }
+
+            /* Die Masse sind fuers Telefon gemacht: 15 Pixel Innenabstand und
+               volle Breite treffen dort den Daumen. Am Rechner wirkt dieselbe
+               Schaltflaeche wie eine vergroesserte App - und die Seite wird
+               unnoetig lang. Hier reicht deutlich weniger. */
+            .btn { padding: 11px 14px; font-size: 13px; border-radius: 10px; }
+            .btn-save { font-size: 14px; padding: 12px 14px; }
+            input { padding: 10px; }
+            .form-group { margin-bottom: 16px; }
+            .btn-group { gap: 8px; margin-bottom: 12px; }
             .dashboard-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; align-items: start; }
             /* AUFTEILUNG - der Grund fuer diese drei Zeilen:
                Frueher lagen alle Bedienbloecke untereinander in Spalte 1,
@@ -156,14 +186,14 @@
                     <div class="btn-group">
                         <form action="/update" method="POST" class="inline-form btn-full">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                            <button type="submit" class="btn btn-update">Manuelles Update</button>
+                            <button type="submit" class="btn btn-haupt">Manuelles Update</button>
                         </form>
                         
                         {# Der Punkt zeigt den JETZIGEN Zustand, die Beschriftung sagt,
                            was der Klick tut. Gruen heisst also: laeuft gerade. #}
                         <form action="/toggle" method="POST" class="inline-form">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                            <button type="submit" class="btn btn-schalter"
+                            <button type="submit" class="btn btn-neutral"
                                     title="Display ist derzeit {% if conf.get('DISPLAY_ACTIVE', True) %}eingeschaltet{% else %}ausgeschaltet{% endif %}">
                                 <span class="punkt {% if conf.get('DISPLAY_ACTIVE', True) %}punkt-an{% else %}punkt-aus{% endif %}"></span>
                                 {% if conf.get('DISPLAY_ACTIVE', True) %}Display aus{% else %}Display an{% endif %}
@@ -172,7 +202,7 @@
                         
                         <form action="/toggle_touch" method="POST" class="inline-form">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                            <button type="submit" class="btn btn-schalter"
+                            <button type="submit" class="btn btn-neutral"
                                     title="Touch ist derzeit {% if conf.get('TOUCH_ACTIVE', True) %}eingeschaltet{% else %}ausgeschaltet{% endif %}">
                                 <span class="punkt {% if conf.get('TOUCH_ACTIVE', True) %}punkt-an{% else %}punkt-aus{% endif %}"></span>
                                 {% if conf.get('TOUCH_ACTIVE', True) %}Touch aus{% else %}Touch an{% endif %}
@@ -192,7 +222,7 @@
                             <input type="number" name="AUTO_UPDATE_SECONDS" value="{{ conf.get('AUTO_UPDATE_SECONDS', 900) }}" min="{{ min_interval }}" max="{{ max_interval }}">
                         </div>
 
-                        <button type="submit" class="btn btn-save">Speichern</button>
+                        <button type="submit" class="btn btn-haupt btn-save">Speichern</button>
                     </form>
                 </div>
                 
@@ -285,18 +315,18 @@
                         </form>
                         <form action="/reset_time" method="POST" class="inline-form">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                            <button type="submit" class="btn btn-update">Zurück zur Echtzeit</button>
+                            <button type="submit" class="btn btn-neutral">Zurück zur Echtzeit</button>
                         </form>
                     </div>
                     
                     <div class="btn-group">
                         <form action="/demo" method="POST" class="inline-form btn-full">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                            <button type="submit" class="btn btn-demo">Lokale Dummy-Daten laden</button>
+                            <button type="submit" class="btn btn-neutral">Lokale Dummy-Daten laden</button>
                         </form>
                         <form action="/test_all" method="POST" class="inline-form btn-full">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                            <button type="submit" class="btn btn-test" style="background-color: #0f172a;">Display-Testlauf (ca. 30 Sek)</button>
+                            <button type="submit" class="btn btn-test">Display-Testlauf (ca. 30 Sek)</button>
                         </form>
                     </div>
 
