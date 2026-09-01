@@ -56,6 +56,12 @@ deactivate
 
 Die Datei `requirements.txt` liegt bereits im Projektverzeichnis, da sie mit dem `git clone` aus Schritt 3 heruntergeladen wurde. Auf Raspberry Pi OS muss dabei nichts kompiliert werden: Die vorkonfigurierte Paketquelle „piwheels" liefert fertig gebaute ARM-Pakete.
 
+Für die Testsuite werden zusätzlich die Werkzeuge aus `requirements-dev.txt` benötigt. Sie sind für den reinen Betrieb nicht erforderlich, aber empfehlenswert: Das Aktualisierungs-Skript aus Schritt 10 lässt die Tests vor jedem Neustart des Dienstes laufen und überspringt sie, wenn `pytest` fehlt.
+
+source webuntis/bin/activate  
+pip install -r requirements-dev.txt  
+deactivate
+
 *Hinweis:* Auf einem Raspberry Pi 5 ersetzen Sie in der `requirements.txt` das Paket `RPi.GPIO` durch das API-kompatible `rpi-lgpio`; der Programmcode bleibt unverändert. Installieren Sie niemals beide gleichzeitig — sie stellen dasselbe Modul bereit und überschreiben sich gegenseitig.
 
 ## **5. Konfiguration**
@@ -93,7 +99,18 @@ Die Vorlage enthält folgende Parameter (hier zur besseren Übersicht auf zwei S
     }  
 }
 
+Die Parameter WEB_HOST und WEB_PUBLIC_URL steuern, worauf der Webserver lauscht und welche Adresse beim Start ausgegeben wird. Die Voreinstellungen passen zu der in Schritt 7 beschriebenen Einrichtung und müssen dort nicht angepasst werden; Abweichungen sind ebenfalls in Schritt 7 beschrieben.
+
 *Wichtiger Hinweis zu den Zugangsdaten:* Die Parameter ADMIN_USER und ADMIN_PASS definieren den Zugang für das Web-Interface. Ändern Sie diese zwingend vor der Inbetriebnahme.
+
+*Wichtiger Hinweis zu den Uhrzeiten:* Alle Zeiten unter SCHEDULE müssen zweistellig geschrieben werden — also "08:00" und nicht "8:00". WebUntis liefert die Startzeiten immer zweistellig, und das Programm vergleicht sie als Zeichenketten; eine einstellige Angabe trifft deshalb auf nichts. Das Display zeigt dann alles Übrige normal an, nur der Name der Stunde bleibt leer — ein Fehler, der ohne Hinweis lange unentdeckt bleibt.
+
+Das Programm prüft die Datei bei jedem Einlesen und schreibt Beanstandungen ins Protokoll (siehe Schritt 8, `journalctl -u raumanzeige`), zum Beispiel:
+
+    WARNING - config.json: SCHEDULE: LESSONS, Eintrag 3 (start): '9:55' muss
+    zweistellig geschrieben werden ('09:55') - sonst bleibt der Stundenname leer.
+
+Abgelehnt wird dabei nichts; das Türschild läuft auch mit einer fehlerhaften Konfiguration weiter und zeigt an, was es anzeigen kann.
 
 ## **6. Datenschutz und Sicherheit**
 
