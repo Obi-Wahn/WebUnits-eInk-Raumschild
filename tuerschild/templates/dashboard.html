@@ -18,6 +18,9 @@
         
         .section-title { font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; margin: 30px 0 15px 0; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px; letter-spacing: 0.5px; }
         .section-title:first-child { margin-top: 0; }
+        /* Der Systemblock ist ab 800px ein eigener Kasten und dort das erste
+           Kind - untereinander braucht seine Ueberschrift aber ihren Abstand. */
+        .block-system .section-title { margin-top: 30px; }
         
         form.inline-form { margin: 0; }
         .btn-group { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; }
@@ -26,21 +29,51 @@
         .btn:active { transform: scale(0.98); }
         .btn-update { background-color: #007BFF; } 
         .btn-demo { background-color: #6f42c1; } 
-        .btn-off { background-color: #DC3545; }    
-        .btn-on { background-color: #28A745; } 
         .btn-test { background-color: #f59e0b; }    
+
+        /* Schalter fuer Display und Touch. Bewusst NEUTRAL, nicht rot:
+           Beides ist mit einem Klick rueckgaengig zu machen. Frueher war der
+           Ausschalt-Knopf rot und "System Herunterfahren" hellgrau - die
+           Warnfarbe sass also auf der harmlosen Schaltflaeche, waehrend die
+           Aktion, nach der jemand zum Geraet laufen und es vom Strom trennen
+           muss, unauffaellig aussah. */
+        .btn-schalter { background-color: #475569; }
+        .punkt { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 7px; vertical-align: 1px; }
+        .punkt-an { background-color: #4ade80; }
+        .punkt-aus { background-color: #cbd5e1; }
+
+        /* Rot ist ab hier den Aktionen vorbehalten, die den Betrieb beenden.
+           Herunterfahren ist die schwerere von beiden und daher gefuellt,
+           Neustart nur umrandet. */
+        .btn-gefahr { background-color: #dc2626; }
+        .btn-gefahr-leise { background-color: white; color: #dc2626; border: 2px solid #fecaca; }
         .btn-save { background-color: #0f172a; width: 100%; font-size: 16px; margin-top: 5px; color: white; padding: 15px; border-radius: 12px; font-weight: bold; }
         
         .form-group { margin-bottom: 20px; }
         label { display: block; font-size: 10px; font-weight: 800; color: #94a3b8; text-transform: uppercase; margin-bottom: 5px; }
         input { width: 100%; box-sizing: border-box; background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 12px; border-radius: 10px; font-size: 14px; font-weight: 600; outline: none; }
         
+        /* Kurzuebersicht unter der Vorschau. Sie fuellt nicht nur die Flaeche,
+           die rechts frei bleibt, wenn gerade kein Unterricht ist - sie
+           beantwortet auch die Fragen, die man beim Blick auf das Dashboard
+           tatsaechlich hat: Wie alt sind die Daten, und geht die Uhr richtig? */
+        .status-liste { margin-top: 20px; border-top: 1px solid #e2e8f0; padding-top: 8px; }
+        .status-liste div { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; padding: 6px 0; }
+        .status-liste dt { color: #94a3b8; font-weight: 700; }
+        .status-liste dd { color: #334155; font-weight: 700; margin: 0; text-align: right; }
+        /* Muss spezifischer sein als ".status-liste dd" (Klasse + Element),
+           sonst gewinnt dort die graue Grundfarbe und die Warnung faellt aus. */
+        .status-liste dd.status-warn { color: #b45309; }
+
         .lesson-block { background: #f8fafc; border-radius: 10px; padding: 15px; margin-top: 10px; border: 1px solid #e2e8f0; }
         .empty-state { text-align: center; color: #94a3b8; font-size: 13px; padding: 20px; background: #f8fafc; border-radius: 10px; margin-top: 10px; font-weight: bold; }
         .error-msg { background-color: #fee2e2; color: #dc2626; padding: 15px; border-radius: 10px; font-size: 13px; font-weight: bold; text-align: center; margin-bottom: 20px; line-height: 1.5; }
         .ok-msg { background-color: #dcfce7; color: #15803d; padding: 15px; border-radius: 10px; font-size: 13px; font-weight: bold; text-align: center; margin-bottom: 20px; }
         .warn-msg { background-color: #fef3c7; color: #854d0e; padding: 15px; border-radius: 10px; font-size: 13px; font-weight: bold; text-align: center; margin-bottom: 20px; line-height: 1.5; }
-        .footer { text-align: center; font-size: 10px; color: #cbd5e1; margin-top: 35px; text-transform: uppercase; letter-spacing: 1px; }
+        /* #cbd5e1 auf Weiss ergab rund 1,5:1 Kontrast - gefordert sind 4,5:1.
+           Die Zeile war damit praktisch unsichtbar, obwohl in ihr auch der
+           Hinweis auf eine laufende Zeitsimulation steht. #64748b bringt 4,8:1. */
+        .footer { text-align: center; font-size: 10px; color: #64748b; margin-top: 35px; text-transform: uppercase; letter-spacing: 1px; }
         
         .tag-red { background-color: #fee2e2; color: #dc2626; padding: 4px 8px; border-radius: 5px; font-size: 11px; font-weight: bold; text-transform: uppercase; margin-bottom: 6px; display: inline-block;}
         .tag-yellow { background-color: #fef08a; color: #854d0e; padding: 4px 8px; border-radius: 5px; font-size: 11px; font-weight: bold; text-transform: uppercase; margin-bottom: 6px; display: inline-block;}
@@ -49,9 +82,18 @@
             body { padding: 40px 20px; }
             .card { margin-top: 0; }
             .dashboard-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; align-items: start; }
+            /* AUFTEILUNG - der Grund fuer diese drei Zeilen:
+               Frueher lagen alle Bedienbloecke untereinander in Spalte 1,
+               waehrend die Vorschau allein beide Zeilen der Spalte 2 einnahm.
+               Sie ist aber nur gefuellt, wenn gerade Unterricht laeuft - am
+               Nachmittag steht dort ein einziges Wort. Ergebnis war ein sehr
+               langer Streifen links und eine fast leere Flaeche rechts.
+               Jetzt teilen sich Bedienung und Vorschau die erste Zeile, und
+               Test und System stehen nebeneinander in der zweiten. */
             .col-controls-top { grid-column: 1; grid-row: 1; }
-            .col-controls-bottom { grid-column: 1; grid-row: 2; }
-            .col-preview { grid-column: 2; grid-row: 1 / span 2; margin-top: 0; margin-bottom: 0; background-color: #f8fafc; padding: 25px; border-radius: 15px; border: 2px dashed #e2e8f0; }
+            .col-preview { grid-column: 2; grid-row: 1; margin-top: 0; margin-bottom: 0; background-color: #f8fafc; padding: 25px; border-radius: 15px; border: 2px dashed #e2e8f0; }
+            .col-controls-bottom { grid-column: 1 / span 2; grid-row: 2; display: grid; grid-template-columns: 1fr 1fr; gap: 40px; align-items: start; }
+            .block-system .section-title { margin-top: 0; }
             .col-preview .section-title { margin-top: 0; }
             .col-preview .lesson-block { background: white; }
             .col-preview .empty-state { background: white; }
@@ -107,16 +149,22 @@
                             <button type="submit" class="btn btn-update">Manuelles Update</button>
                         </form>
                         
+                        {# Der Punkt zeigt den JETZIGEN Zustand, die Beschriftung sagt,
+                           was der Klick tut. Gruen heisst also: laeuft gerade. #}
                         <form action="/toggle" method="POST" class="inline-form">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                            <button type="submit" class="btn {% if conf.get('DISPLAY_ACTIVE', True) %}btn-off{% else %}btn-on{% endif %}">
+                            <button type="submit" class="btn btn-schalter"
+                                    title="Display ist derzeit {% if conf.get('DISPLAY_ACTIVE', True) %}eingeschaltet{% else %}ausgeschaltet{% endif %}">
+                                <span class="punkt {% if conf.get('DISPLAY_ACTIVE', True) %}punkt-an{% else %}punkt-aus{% endif %}"></span>
                                 {% if conf.get('DISPLAY_ACTIVE', True) %}Display aus{% else %}Display an{% endif %}
                             </button>
                         </form>
                         
                         <form action="/toggle_touch" method="POST" class="inline-form">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                            <button type="submit" class="btn {% if conf.get('TOUCH_ACTIVE', True) %}btn-off{% else %}btn-on{% endif %}">
+                            <button type="submit" class="btn btn-schalter"
+                                    title="Touch ist derzeit {% if conf.get('TOUCH_ACTIVE', True) %}eingeschaltet{% else %}ausgeschaltet{% endif %}">
+                                <span class="punkt {% if conf.get('TOUCH_ACTIVE', True) %}punkt-an{% else %}punkt-aus{% endif %}"></span>
                                 {% if conf.get('TOUCH_ACTIVE', True) %}Touch aus{% else %}Touch an{% endif %}
                             </button>
                         </form>
@@ -200,9 +248,23 @@
                             </div>
                         {% endif %}
                     </div>
+
+                    <div class="status-liste">
+                        <div><dt>Letzter Abruf</dt>
+                            <dd {% if stale %}class="status-warn"{% endif %}>{{ last_sync if last_sync else "noch keiner" }}</dd></div>
+                        <div><dt>Datenstand</dt>
+                            <dd {% if stale %}class="status-warn"{% endif %}>{{ "aus der Rücklage" if stale else "aktuell" }}</dd></div>
+                        <div><dt>Abruf alle</dt>
+                            <dd>{{ update_interval // 60 }} Min.</dd></div>
+                        <div><dt>Uhr</dt>
+                            <dd {% if sim_active %}class="status-warn"{% endif %}>{{ "simuliert" if sim_active else "Echtzeit" }}</dd></div>
+                        <div><dt>Display</dt>
+                            <dd>{{ "an" if conf.get('DISPLAY_ACTIVE', True) else "aus" }}</dd></div>
+                    </div>
                 </div>
                 
                 <div class="col-controls-bottom">
+                  <div class="block-test">
                     <div class="section-title">Test & Simulation</div>
                     <div style="background: #f8fafc; border-radius: 10px; padding: 15px; margin-bottom: 15px; border: 1px solid #e2e8f0;">
                         <label>Datum & Uhrzeit simulieren</label>
@@ -228,18 +290,22 @@
                         </form>
                     </div>
 
+                  </div>
+
+                  <div class="block-system">
                     <div class="section-title">System</div>
                     <div class="btn-group">
                         <!-- Die onsubmit Methode wirft vorher noch einen JavaScript-Confirm-Dialog aus -->
                         <form action="/sys_reboot" method="POST" class="inline-form btn-full" onsubmit="return confirm('Raspberry Pi wirklich neu starten? Das E-Paper wird kurz abgeschaltet.');">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                            <button type="submit" class="btn btn-test" style="background-color: #475569;">System Neustart</button>
+                            <button type="submit" class="btn btn-gefahr-leise">System Neustart</button>
                         </form>
                         <form action="/sys_shutdown" method="POST" class="inline-form btn-full" onsubmit="return confirm('ACHTUNG: Raspberry Pi wirklich herunterfahren? Er muss danach manuell vom Strom getrennt und wieder verbunden werden, um neu zu starten!');">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                            <button type="submit" class="btn btn-off" style="background-color: #94a3b8; color: #0f172a;">System Herunterfahren</button>
+                            <button type="submit" class="btn btn-gefahr">System Herunterfahren</button>
                         </form>
                     </div>
+                  </div>
                 </div>
 
             </div>
