@@ -9,9 +9,11 @@ und wuerden bei einer spaeteren Aenderung unbemerkt verlorengehen:
     Aktion, die ein Klick rueckgaengig macht - und "System Herunterfahren" war
     hellgrau, obwohl danach jemand zum Geraet laufen und es vom Strom trennen
     muss. Die Warnfarbe sass auf der harmlosen Schaltflaeche.
-  * OB DIE STATUSZEILE LESBAR IST. Sie stand auf #cbd5e1: rund 1,5:1 Kontrast
-    gegen Weiss, also faktisch unsichtbar - und dort steht auch der Hinweis auf
-    eine laufende Zeitsimulation.
+  * OB DIE STATUSZEILE LESBAR IST. Sie stand als Fusszeile auf #cbd5e1: rund
+    1,5:1 Kontrast gegen Weiss, also faktisch unsichtbar - und dort steht auch
+    der Hinweis auf eine laufende Zeitsimulation. Inzwischen sitzt sie in der
+    dunklen Kopfzeile, wo die Rechnung eine andere ist; der Test holt sich
+    beide Farben deshalb aus dem Stylesheet, statt eine davon anzunehmen.
   * WELCHES ABRUFINTERVALL ANGEZEIGT WIRD. Das Formular zeigt den rohen Wert
     aus der Datei, die Uebersicht muss den zeigen, mit dem wirklich gearbeitet
     wird - sonst behauptet die Seite etwas Falsches.
@@ -94,18 +96,47 @@ def leuchtdichte(farbe):
     return 0.2126 * werte[0] + 0.7152 * werte[1] + 0.0722 * werte[2]
 
 
+def kontrast(vordergrund, hintergrund):
+    hell, dunkel = sorted((leuchtdichte(vordergrund), leuchtdichte(hintergrund)),
+                          reverse=True)
+    return (hell + 0.05) / (dunkel + 0.05)
+
+
+def farbe(regel, eigenschaft="color"):
+    treffer = re.search(re.escape(regel) + r" \{[^}]*" + eigenschaft
+                        + r": #([0-9a-fA-F]{6})", vorlage())
+    assert treffer, f"'{regel}' hat keine Angabe fuer {eigenschaft} mehr"
+    return treffer.group(1)
+
+
 def test_die_statuszeile_ist_lesbar():
     """
-    Sie steht auf weissem Grund und traegt neben dem Zeitstempel den Hinweis
-    auf eine laufende Zeitsimulation. Gefordert sind 4,5:1.
-    """
-    treffer = re.search(r"\.footer \{[^}]*color: #([0-9a-fA-F]{6})", vorlage())
-    assert treffer, "Die Statuszeile hat keine eigene Farbangabe mehr"
+    Sie sitzt in der dunklen Kopfzeile und traegt neben dem Zeitstempel den
+    Hinweis auf eine laufende Zeitsimulation. Gefordert sind 4,5:1.
 
-    kontrast = 1.05 / (leuchtdichte(treffer.group(1)) + 0.05)
-    assert kontrast >= 4.5, (
-        f"Kontrast der Statuszeile nur {kontrast:.1f}:1 - gefordert sind 4,5:1"
-    )
+    Beide Farben kommen aus dem Stylesheet. Wuerde der Test den Hintergrund
+    annehmen, ginge er beim naechsten Umbau der Kopfzeile stillschweigend von
+    einer falschen Rechnung aus.
+    """
+    grund = farbe(".header", "background-color")
+
+    for regel in (".kopf-status", ".kopf-status .simuliert"):
+        wert = kontrast(farbe(regel), grund)
+        assert wert >= 4.5, (
+            f"Kontrast von {regel} nur {wert:.1f}:1 - gefordert sind 4,5:1"
+        )
+
+
+def test_der_zeitstempel_steht_in_der_kopfzeile(webclient):
+    """
+    Er sagt, wie aktuell das Gezeigte ist. Unter dem letzten Knopf las ihn
+    niemand.
+    """
+    inhalt = seite(webclient)
+    kopf = inhalt.index('class="header"')
+    ende = inhalt.index('class="content"')
+    assert "Stand:" in inhalt[kopf:ende], "Der Zeitstempel steht nicht mehr im Kopf"
+    assert 'class="footer"' not in inhalt, "Die alte Fusszeile ist noch da"
 
 
 # ==============================================================================
