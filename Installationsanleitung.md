@@ -103,6 +103,14 @@ Die Parameter WEB_HOST und WEB_PUBLIC_URL steuern, worauf der Webserver lauscht 
 
 *Wichtiger Hinweis zu den Zugangsdaten:* Die Parameter ADMIN_USER und ADMIN_PASS definieren den Zugang für das Web-Interface. Ändern Sie diese zwingend vor der Inbetriebnahme.
 
+*Die Zeiten müssen Sie nicht abtippen:* WebUntis kennt den Zeitraster Ihrer Schule. Nachdem die Zugangsdaten oben eingetragen sind, liest ihn das beiliegende Hilfsmittel aus und schlägt einen fertigen SCHEDULE-Block vor:
+
+source webuntis/bin/activate  
+python3 stundenraster_auslesen.py  
+deactivate
+
+Es speichert nichts, sondern gibt den Block zur Ansicht aus. Die Namen der Pausen kennt WebUntis nicht — dort steht überall "Pause"; daraus lässt sich von Hand "1. Pause" oder "Mittagspause" machen. Ist der Raster an Ihrer Schule nicht gepflegt, sagt das Skript das, und die Zeiten bleiben von Hand einzutragen.
+
 *Wichtiger Hinweis zu den Uhrzeiten:* Alle Zeiten unter SCHEDULE müssen zweistellig geschrieben werden — also "08:00" und nicht "8:00". WebUntis liefert die Startzeiten immer zweistellig, und das Programm vergleicht sie als Zeichenketten; eine einstellige Angabe trifft deshalb auf nichts. Das Display zeigt dann alles Übrige normal an, nur der Name der Stunde bleibt leer — ein Fehler, der ohne Hinweis lange unentdeckt bleibt.
 
 Das Programm prüft die Datei bei jedem Einlesen und schreibt Beanstandungen ins Protokoll (siehe Schritt 8, `journalctl -u raumanzeige`), zum Beispiel:

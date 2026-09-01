@@ -135,6 +135,23 @@ Gestartet wird weiterhin über `raumanzeige.py` im Projektverzeichnis — dort s
 
 *Hinweis für Änderungen:* Soll in Tests eine Funktion ersetzt werden, muss das im **definierenden** Modul geschehen (etwa `tuerschild.hardware.epd2in13_V3`). Die Sammel-Importe in `tuerschild/__init__.py` sind Kopien der Verweise; ein Ersetzen dort träfe nur diese Kopie.
 
+### **Stundenraster aus WebUntis übernehmen**
+
+Die Zeiten unter `SCHEDULE` müssen nicht abgetippt werden — WebUntis kennt den Zeitraster der Schule und gibt ihn über die Schnittstelle heraus. Das Hilfsmittel `stundenraster_auslesen.py` holt ihn und schlägt daraus einen fertigen Block vor:
+
+```bash
+source webuntis/bin/activate
+python3 stundenraster_auslesen.py
+```
+
+Es zeigt zunächst, was pro Wochentag hinterlegt ist, und gibt dann den `SCHEDULE`-Block zum Hineinkopieren aus. **Gespeichert wird nichts** — was übernommen wird, entscheidet ein Mensch.
+
+Zwei Dinge kommen dabei nicht aus WebUntis: Die **Namen der Pausen** kennt es nicht, dort steht überall „Pause"; aus dem lässt sich von Hand „1. Pause" oder „Mittagspause" machen. Und der **Vorlauf** von `DAY_START` (bei fünf Minuten vor der ersten Stunde zeigt das Schild bis dahin „Guten Morgen!") ist eine bewusste Zugabe, einstellbar über `--vorlauf`.
+
+Zu beachten: Der Raster ist in WebUntis **pro Wochentag** hinterlegt, `SCHEDULE` kennt dagegen nur ein Tagesmuster. Unterscheiden sich die Tage, weist das Skript darauf hin; mit `--tag freitag` lässt sich ein anderer Tag zugrunde legen.
+
+*Das Türschild selbst ruft den Raster nicht ab.* `SCHEDULE` wird gerade dann gebraucht, wenn WebUntis nicht erreichbar ist — käme es aus dem Netz, stünde das Gerät beim ersten Start ohne Verbindung ohne Plan da.
+
 ## **🔄 Aktualisieren**
 
 Ein neuer Programmstand wird mit `update.sh` eingespielt:
