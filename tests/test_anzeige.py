@@ -8,6 +8,8 @@ richtige Information erhalten bleibt.
 Gezeichnet wird mit echtem Pillow, aber in einen Speicherpuffer (siehe
 conftest.py). Layoutfehler fallen dadurch auf, ohne das Panel zu beruehren.
 """
+import pytest
+
 import tuerschild as R
 from conftest import uhrzeit
 
@@ -148,8 +150,10 @@ def test_fehlende_lehrkraft_erzeugt_keine_leeren_trenner(zeichenflaeche):
 # ==============================================================================
 # Status-Kaesten (AUSFALL / VERTRETUNG)
 # ==============================================================================
-#: Oberkante des Status-Kastens im JETZT-Block (y_offset 30 + 13)
-KASTEN_OBEN = 43
+#: Oberkante des Status-Kastens im JETZT-Block.
+#: Abgeleitet, nicht abgeschrieben: Der Wert stand hier frueher als 43 im Code
+#: und war falsch, sobald der Block verschoben wurde.
+KASTEN_OBEN = R.UI_BLOCK_JETZT_Y + 13
 
 
 def _kasten_rechts_im_bild(bild):
@@ -235,19 +239,32 @@ def test_offline_markierung_veraendert_das_bild(conf, display_attrappe):
     assert mit_markierung != ohne_markierung
 
 
-def test_offline_markierung_ueberschreibt_die_uhrzeit_nicht(conf, display_attrappe):
-    """Der Hinweis sitzt rechts aussen und darf die Kopfzeile nicht stoeren."""
+def test_offline_markierung_und_uhrzeit_ueberschneiden_sich_nicht(conf, display_attrappe):
+    """
+    Beide sitzen rechts in der Kopfzeile. Frueher stand die Uhrzeit starr auf
+    x=120 und der Hinweis am rechten Rand; heute rueckt die Uhrzeit zur Seite,
+    wenn der Hinweis Platz braucht. Geprueft wird deshalb nicht mehr, dass die
+    Kopfzeile gleich bleibt, sondern dass zwischen beiden eine Luecke bleibt.
+    """
     R.app_state.simulated_datetime = uhrzeit(8, 20)
     daten = {"current": stunde(), "next": None}
 
     R.update_display_logic(daten, "", conf, stale=True)
-    mit = display_attrappe.letztes_bild.crop((120, 0, 215, R.UI_HEADER_HEIGHT))
-    mit_daten = mit.tobytes()
+    pixel = display_attrappe.letztes_bild.load()
 
-    R.update_display_logic(daten, "", conf, stale=False)
-    ohne = display_attrappe.letztes_bild.crop((120, 0, 215, R.UI_HEADER_HEIGHT))
+    # Von der linken Kante des Hinweiskastens aus nach links laufen: bis zur
+    # Uhrzeit muessen ein paar Spalten durchgehend schwarz (leer) sein.
+    kasten_links = R.UI_WIDTH - 13
+    leere_spalten = 0
+    for x in range(kasten_links - 1, R.UI_MARGIN, -1):
+        if any(pixel[x, y] for y in range(2, R.UI_HEADER_HEIGHT - 2)):
+            break
+        leere_spalten += 1
 
-    assert mit_daten == ohne.tobytes()
+    assert leere_spalten >= 2, (
+        f"Uhrzeit und Offline-Hinweis stossen aneinander "
+        f"(nur {leere_spalten} freie Spalten)"
+    )
 
 
 def test_mehrzeilige_meldung_wird_gezeichnet(conf, display_attrappe):
@@ -255,3 +272,186 @@ def test_mehrzeilige_meldung_wird_gezeichnet(conf, display_attrappe):
     R.app_state.simulated_datetime = uhrzeit(10, 0)
     R.update_display_logic(None, "Unterrichtsfrei!\n(Ferienzeit)", conf)
     assert display_attrappe.anzahl_anzeigen == 1
+
+
+# ==============================================================================
+# Kopfzeile: Raumname gegen Uhrzeit
+# ==============================================================================
+def _erste_schwarze_spalte_ab(bild, ab_x, bis_x, oben=2, unten=None):
+    """Sucht in der Kopfzeile die erste Spalte, in der Schrift steht."""
+    unten = unten if unten is not None else R.UI_HEADER_HEIGHT - 2
+    pixel = bild.load()
+    for x in range(ab_x, bis_x):
+        if any(pixel[x, y] for y in range(oben, unten)):
+            return x
+    return None
+
+
+def test_langer_raumname_ueberschreibt_die_uhrzeit_nicht(conf, display_attrappe):
+    """
+    Der eigentliche Fehler: Der Raumname wurde ungekuerzt bei x=5 gezeichnet,
+    die Uhrzeit starr bei x=120. Ab etwa neun breiten Zeichen schrieben sich
+    beide uebereinander - im Formular erlaubt sind 40 Zeichen.
+    """
+    R.app_state.simulated_datetime = uhrzeit(10, 15)
+    lang = {**conf, "ROOM_NAME": "Chemie-Vorbereitung Erdgeschoss"}
+    R.update_display_logic(None, "Raum ist frei", lang)
+    bild = display_attrappe.letztes_bild
+
+    # Rechts in der Kopfzeile steht die Uhrzeit. Zwischen ihr und dem Raumnamen
+    # muss eine Luecke bleiben - gesucht wird von rechts nach links.
+    pixel = bild.load()
+    spalten_mit_schrift = [x for x in range(R.UI_MARGIN, R.UI_WIDTH)
+                           if any(pixel[x, y] for y in range(2, R.UI_HEADER_HEIGHT - 2))]
+    luecken = [b - a for a, b in zip(spalten_mit_schrift, spalten_mit_schrift[1:])
+               if b - a > 4]
+    assert luecken, "Raumname und Uhrzeit gehen ineinander über"
+
+
+def test_der_raumname_wird_gekuerzt_statt_zu_ueberlaufen(conf, display_attrappe):
+    R.app_state.simulated_datetime = uhrzeit(10, 15)
+    R.update_display_logic(None, "Raum ist frei", {**conf, "ROOM_NAME": "N" * 40})
+    bild = display_attrappe.letztes_bild
+    pixel = bild.load()
+
+    # In der Mitte der Kopfzeile muss eine schriftfreie Zone liegen: Der
+    # gekuerzte Name endet dort, die Uhrzeit beginnt erst spaeter.
+    frei = [x for x in range(60, 160)
+            if not any(pixel[x, y] for y in range(2, R.UI_HEADER_HEIGHT - 2))]
+    assert len(frei) >= 8, "Der Raumname läuft bis in die Uhrzeit hinein"
+
+
+def test_kurzer_raumname_bleibt_unveraendert(conf, display_attrappe):
+    """Gegenprobe: Gekuerzt werden darf nur, was wirklich nicht passt."""
+    R.app_state.simulated_datetime = uhrzeit(10, 15)
+    R.update_display_logic(None, "Raum ist frei", {**conf, "ROOM_NAME": "Raum101"})
+    kurz = display_attrappe.letztes_bild.crop((0, 0, 120, R.UI_HEADER_HEIGHT)).tobytes()
+
+    R.update_display_logic(None, "Raum ist frei", {**conf, "ROOM_NAME": "Raum101"})
+    assert display_attrappe.letztes_bild.crop((0, 0, 120, R.UI_HEADER_HEIGHT)).tobytes() == kurz
+    assert "…" not in "Raum101"
+
+
+# ==============================================================================
+# Trennlinie gegen Detailzeile
+# ==============================================================================
+def test_die_trennlinie_schneidet_die_detailzeile_nicht():
+    """
+    Die Linie lag fest auf y=68, waehrend die Detailzeile des JETZT-Blocks bis
+    y=70 reichte. Bei Buchstaben mit Unterlaenge (g, p, q) lief sie mitten
+    durch den Text.
+
+    Gerechnet wird mit Pillows eigenen Schriftmassen, nicht relativ zur Linie:
+    Ein Test, der "die Zeile ueber der Linie ist frei" prueft, verschiebt seine
+    Messstelle mit der Linie mit und kann einen falschen Wert gar nicht
+    bemerken. Genau daran ist eine erste Fassung gescheitert.
+    """
+    from PIL import Image, ImageDraw
+    R.init_fonts()
+    draw = ImageDraw.Draw(Image.new("1", (R.UI_WIDTH, R.UI_HEIGHT), 255))
+    f_small = R.app_state.global_fonts["small"]
+
+    # So setzt draw_lesson_block die Detailzeile: 13 Pixel unter dem Fach,
+    # das seinerseits 13 Pixel unter der Beschriftung sitzt.
+    y_detail = R.UI_BLOCK_JETZT_Y + 26
+    unterkante = draw.textbbox((R.UI_MARGIN, y_detail),
+                               "Kl: 9B | Lehrkraft: Gkpq", font=f_small)[3]
+
+    assert R.UI_LINE_Y > unterkante, (
+        f"Die Trennlinie (y={R.UI_LINE_Y}) liegt nicht unter der Detailzeile "
+        f"(reicht bis y={unterkante})"
+    )
+
+
+def test_die_bloecke_liegen_beidseits_der_linie(conf, display_attrappe):
+    """Reihenfolge der drei Werte - sonst zeichnete ein Block über die Linie."""
+    assert R.UI_HEADER_HEIGHT < R.UI_BLOCK_JETZT_Y < R.UI_LINE_Y < R.UI_BLOCK_DANACH_Y
+    assert R.UI_BLOCK_DANACH_Y + 40 <= R.UI_HEIGHT, "Der untere Block läuft aus dem Bild"
+
+
+# ==============================================================================
+# Meldungen: gross und mittig
+# ==============================================================================
+def _schwarze_zeilen(bild):
+    """
+    Bildzeilen mit Schrift, unterhalb der Kopfzeile.
+
+    Der Balken der Kopfzeile wird bis EINSCHLIESSLICH y=24 gefuellt - die
+    Suche beginnt deshalb eine Zeile tiefer, sonst zaehlt seine Unterkante als
+    Text und die Meldung erschiene stets bis ganz nach oben reichend.
+    """
+    pixel = bild.load()
+    return [y for y in range(R.UI_HEADER_HEIGHT + 1, R.UI_HEIGHT)
+            if any(pixel[x, y] == 0 for x in range(R.UI_WIDTH))]
+
+
+def test_kurze_meldung_wird_gross_gesetzt(conf, display_attrappe):
+    """
+    Frueher stand hier immer 16 Pixel, obwohl die 24er Schrift geladen war und
+    "Unterrichtsende" mit 220 von 240 Pixeln bequem hineinpasst.
+    """
+    R.app_state.simulated_datetime = uhrzeit(16, 0)
+    R.update_display_logic(None, "Unterrichtsende", conf)
+
+    zeilen = _schwarze_zeilen(display_attrappe.letztes_bild)
+    hoehe = zeilen[-1] - zeilen[0] + 1
+    assert hoehe >= 17, f"Die Meldung ist nur {hoehe} Pixel hoch - zu klein für 24px"
+
+
+def test_zu_breite_meldung_faellt_eine_stufe_zurueck(conf, display_attrappe):
+    """
+    "Schönes Wochenende!" braucht bei 24 Pixeln 305 von 240 verfuegbaren. Statt
+    zu kuerzen wird eine kleinere Schrift genommen - der Text bleibt ganz.
+    """
+    R.app_state.simulated_datetime = uhrzeit(10, 0)
+    R.update_display_logic(None, "Schönes Wochenende!", conf)
+
+    bild = display_attrappe.letztes_bild
+    zeilen = _schwarze_zeilen(bild)
+    assert zeilen, "Es wurde gar nichts gezeichnet"
+    assert zeilen[-1] - zeilen[0] + 1 < 20, "Die Schrift wurde nicht verkleinert"
+
+    pixel = bild.load()
+    rand = [y for y in zeilen if pixel[R.UI_WIDTH - 2, y] == 0]
+    assert not rand, "Der Text stößt an den rechten Rand"
+
+
+@pytest.mark.parametrize("meldung", [
+    "Unterrichtsende",
+    "Unterrichtsfrei!\n(Sommerferien)",
+])
+def test_die_meldung_steht_mittig(conf, display_attrappe, meldung):
+    """
+    Frueher begann sie starr bei y=60 und liess unten 46 Pixel leer.
+
+    Der zweizeilige Fall gehoert dazu: Bei einer einzelnen Zeile trifft ein
+    fester Wert von 60 die Mitte fast zufaellig, bei zweien nicht mehr. Eine
+    erste Fassung dieses Tests prueft nur die eine Zeile - und blieb gruen,
+    als ich die Mittelung versuchsweise wieder herausnahm.
+    """
+    R.app_state.simulated_datetime = uhrzeit(16, 0)
+    R.update_display_logic(None, meldung, conf)
+
+    zeilen = _schwarze_zeilen(display_attrappe.letztes_bild)
+    oben = zeilen[0] - R.UI_HEADER_HEIGHT
+    unten = R.UI_HEIGHT - zeilen[-1]
+    assert abs(oben - unten) <= 8, (
+        f"Die Meldung sitzt nicht mittig: {oben} Pixel oben, {unten} unten"
+    )
+
+
+def test_die_uhrzeit_steht_rechtsbuendig(conf, display_attrappe):
+    """
+    Sonst bliebe rechts ein Loch und der Raumname waere ohne Not kuerzer -
+    frueher stand die Uhrzeit starr auf x=120.
+    """
+    R.app_state.simulated_datetime = uhrzeit(10, 15)
+    R.update_display_logic(None, "Raum ist frei", conf)
+
+    pixel = display_attrappe.letztes_bild.load()
+    letzte = max(x for x in range(R.UI_WIDTH)
+                 if any(pixel[x, y] for y in range(2, R.UI_HEADER_HEIGHT - 2)))
+    assert letzte >= R.UI_WIDTH - R.UI_MARGIN - 3, (
+        f"Die Uhrzeit endet schon bei x={letzte}, der Rand liegt bei "
+        f"{R.UI_WIDTH - R.UI_MARGIN}"
+    )

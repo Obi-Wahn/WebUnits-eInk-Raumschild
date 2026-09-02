@@ -92,8 +92,19 @@ TRANSIENT_ERRORS = {ERR_NO_NETWORK, ERR_UNTIS_OFFLINE}
 UI_WIDTH = 250
 UI_HEIGHT = 122
 UI_HEADER_HEIGHT = 24
-UI_LINE_Y = 68
 UI_MARGIN = 5
+UI_HEADER_GAP = 8              # Luft zwischen Raumname und Uhrzeit
+
+# Senkrechte Aufteilung des Hauptbereichs.
+#
+# ACHTUNG, DIESE DREI WERTE HAENGEN ZUSAMMEN: Ein Stundenblock ist rund
+# 40 Pixel hoch (Beschriftung, Fach, Detailzeile). Die Trennlinie lag frueher
+# auf 68, waehrend die Detailzeile des oberen Blocks bis y=70 reichte - bei
+# Buchstaben mit Unterlaenge (g, p, k) lief die Linie mitten durch den Text.
+# tests/test_anzeige.py rechnet die Abstaende nach.
+UI_BLOCK_JETZT_Y = 27
+UI_LINE_Y = 70
+UI_BLOCK_DANACH_Y = 74
 UI_BADGE_PADDING = 3            # Luft links und rechts im Status-Kasten
 UI_BADGE_GAP = 5                # Abstand zwischen Status-Kasten und Fachname
 UI_ELLIPSIS = "…"               # Zeichen für gekürzte Texte (U+2026)

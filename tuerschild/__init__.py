@@ -36,7 +36,9 @@ from .konstanten import (BACKGROUND_ERROR_PAUSE, DEFAULT_UPDATE_SECONDS,
                          STALE_ALERT_SECONDS, STATUS_LABELS, TOUCH_COOLDOWN,
                          TOUCH_I2C_ADDR, TOUCH_RST_PIN, TRANSIENT_ERRORS,
                          TRUSTED_PROXIES,
-                         UI_BADGE_GAP, UI_BADGE_PADDING, UI_ELLIPSIS,
+                         UI_BADGE_GAP, UI_BADGE_PADDING,
+                         UI_BLOCK_DANACH_Y, UI_BLOCK_JETZT_Y, UI_ELLIPSIS,
+                         UI_HEADER_GAP,
                          UI_HEADER_HEIGHT, UI_HEIGHT, UI_LINE_Y, UI_MARGIN,
                          UI_WIDTH, WAVESHARE_LIB)
 from .zustand import AppState, Lesson, TimedLesson, app_state
@@ -47,7 +49,8 @@ from .konfiguration import (CONFIG_FILE, formatiere_dauer, get_cached_config,
 from .hardware import (check_touch_via_i2c, clear_display_once,
                        clear_touch_interrupt_via_i2c, init_fonts)
 from .anzeige import (build_detail_line, draw_lesson_block, get_text_width,
-                      truncate_to_width, update_display_logic, zeichne_anzeige)
+                      truncate_to_width, update_display_logic, zeichne_anzeige,
+                      zeichne_meldung)
 from .untis import (get_current_lesson, get_offline_fallback, parse_lesson,
                     resolve_timetable, select_lessons)
 from .steuerung import (background_loop, melde_stoerungsdauer,
