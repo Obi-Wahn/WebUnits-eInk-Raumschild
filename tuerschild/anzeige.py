@@ -11,14 +11,15 @@ in hardware.py auch hier - worauf die Testsuite beruht, die das echte Display
 durch eine Attrappe ersetzt.
 """
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from PIL import Image, ImageDraw, ImageFont
 
 from . import hardware
 from .hardware import init_fonts
 from .konfiguration import get_now
-from .konstanten import (STATUS_LABELS, UI_BADGE_GAP, UI_BADGE_PADDING,
+from .konstanten import (ROOM_NAME_MAX_LEN, STATUS_LABELS, UI_BADGE_GAP,
+                         UI_BADGE_PADDING,
                          UI_BLOCK_DANACH_Y, UI_BLOCK_JETZT_Y, UI_ELLIPSIS,
                          UI_HEADER_GAP, UI_HEADER_HEIGHT, UI_HEIGHT, UI_LINE_Y,
                          UI_MARGIN, UI_STALE_ZEICHEN, UI_WIDTH,
@@ -187,6 +188,63 @@ def draw_lesson_block(draw: ImageDraw.ImageDraw, lesson: Lesson, y_offset: int, 
     y_details = y_content + 13
     detail_str = build_detail_line(draw, lesson, f_small, UI_WIDTH - 2 * UI_MARGIN)
     draw.text((UI_MARGIN, y_details), detail_str, font=f_small, fill=0)
+
+# Zeichenmuster fuer die Abschaetzung im Web-Formular. Die Schrift ist
+# proportional: "MW" braucht fast doppelt so viel Platz wie "en". Eine einzelne
+# Zahl waere deshalb fuer die Haelfte aller Raumnamen falsch.
+RAUM_MUSTER_BREIT = "MWOBAG"
+RAUM_MUSTER_SCHMAL = "aeinrs"
+
+def _passende_zeichen(draw: ImageDraw.ImageDraw, muster: str, font, platz: int) -> int:
+    """Wie viele Zeichen des wiederholten Musters in 'platz' Pixel passen."""
+    text = muster * (ROOM_NAME_MAX_LEN // len(muster) + 1)
+    for i in range(1, ROOM_NAME_MAX_LEN + 1):
+        if get_text_width(draw, text[:i], font) > platz:
+            return i - 1
+    return ROOM_NAME_MAX_LEN
+
+def sichtbare_raumzeichen(stale: bool = False) -> Tuple[int, int]:
+    """
+    Schaetzt, wie viele Zeichen eines Raumnamens in die Kopfzeile passen.
+
+    WOFUER: Das Formular im Web-Interface nimmt 40 Zeichen an, auf dem Schild
+    ist aber lange vorher Schluss - bisher merkte man das erst nach dem
+    Speichern, an den drei Punkten in der Vorschau. Der Hinweis unter dem Feld
+    sagt es vorher.
+
+    WARUM GERECHNET UND NICHT EINGETRAGEN: Gerechnet wird mit derselben
+    Schrift und derselben Geometrie wie in zeichne_anzeige(). Eine fest
+    eingetragene Zahl waere still falsch geworden, sobald sich Schriftgroesse,
+    Kopfzeilenhoehe oder Datumsformat aendern - und niemand haette es gemerkt.
+
+    Zurueck kommt eine Spanne: erst die breiten Grossbuchstaben, dann die
+    schmalen Kleinbuchstaben. Fuer die Uhrzeit wird der breiteste Wochentag
+    angesetzt, also der unguenstigste Fall. Mit gesetztem Offline-Zeichen
+    (stale=True) bleibt entsprechend weniger Platz.
+    """
+    draw = ImageDraw.Draw(Image.new('1', (UI_WIDTH, UI_HEADER_HEIGHT), 255))
+    init_fonts()
+    f_med = app_state.global_fonts['med']
+    f_small = app_state.global_fonts['small']
+
+    # Dieselbe Rechnung von rechts nach links wie in der Kopfzeile selbst.
+    rechter_rand = UI_WIDTH - UI_MARGIN
+    if stale:
+        rechter_rand -= (get_text_width(draw, UI_STALE_ZEICHEN, f_med)
+                         + 2 * UI_BADGE_PADDING + UI_BADGE_GAP)
+
+    # Die Ziffern der Schrift sind gleich breit, die Wochentagskuerzel nicht:
+    # "Fr" misst 10 Pixel, "Mo" 16. Zurzeit ist der Montag der breiteste Tag,
+    # ein fester Zugriff auf WOCHENTAGE_KURZ[0] waere also heute gleichwertig -
+    # aber nur zufaellig. Das max() bleibt richtig, wenn dort einmal
+    # ausgeschriebene Wochentage stehen.
+    breiteste_zeit = max((f"{tag} 22.12.2026 22:22" for tag in WOCHENTAGE_KURZ),
+                         key=lambda text: get_text_width(draw, text, f_small))
+    platz = (rechter_rand - get_text_width(draw, breiteste_zeit, f_small)
+             - UI_MARGIN - UI_HEADER_GAP)
+
+    return (_passende_zeichen(draw, RAUM_MUSTER_BREIT, f_med, platz),
+            _passende_zeichen(draw, RAUM_MUSTER_SCHMAL, f_med, platz))
 
 def zeichne_anzeige(data: Optional[Dict[str, Optional[Lesson]]], message: str, conf: Dict[str, Any], stale: bool = False) -> Image.Image:
     """

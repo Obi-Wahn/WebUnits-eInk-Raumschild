@@ -21,7 +21,7 @@ from typing import Optional
 from flask import Flask, abort, redirect, render_template, request, Response
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from .anzeige import zeichne_anzeige
+from .anzeige import sichtbare_raumzeichen, zeichne_anzeige
 from .konfiguration import (formatiere_dauer, get_cached_config, get_now,
                             get_update_interval, pruefe_raumname, save_config)
 from .konstanten import (DEFAULT_UPDATE_SECONDS, FAILED_LOGIN_MAX,
@@ -287,6 +287,10 @@ def index():
         save_error=save_error,
         save_ok=save_ok,
         room_max=ROOM_NAME_MAX_LEN,
+        # Die Spanne wird aus der echten Kopfzeilen-Geometrie gerechnet, nicht
+        # im Formular eingetragen: eine feste Zahl im Text waere still falsch
+        # geworden, sobald sich Schrift oder Kopfzeile aendern.
+        room_sichtbar=sichtbare_raumzeichen(),
         # Das TATSAECHLICH benutzte Intervall, nicht der rohe Wert aus der
         # Datei: get_update_interval() begrenzt ihn. Wer von Hand 30 einträgt,
         # sieht im Formular 30 - gearbeitet wird aber mit 300.

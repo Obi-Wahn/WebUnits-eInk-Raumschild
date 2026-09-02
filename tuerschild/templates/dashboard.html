@@ -187,6 +187,7 @@
         .panel img { display: block; width: 100%; height: auto; image-rendering: pixelated; background: white; border-radius: 3px; }
         .sim-kasten { background: var(--feld); border-radius: 10px; padding: 15px; margin-bottom: 15px; border: 1px solid var(--linie); }
         .panel-hinweis { font-size: 11px; color: var(--text-leise); text-align: center; margin: 8px 0 0; font-weight: 600; }
+        .feld-hinweis { font-size: 11px; color: var(--text-leise); margin: 6px 0 0; font-weight: 600; line-height: 1.4; }
 
         .error-msg { background-color: var(--fehler-grund); color: var(--fehler-schrift); padding: 15px; border-radius: 10px; font-size: 13px; font-weight: bold; text-align: center; margin-bottom: 20px; line-height: 1.5; }
         .ok-msg { background-color: var(--ok-grund); color: var(--ok-schrift); padding: 15px; border-radius: 10px; font-size: 13px; font-weight: bold; text-align: center; margin-bottom: 20px; }
@@ -305,6 +306,15 @@
                         <div class="form-group">
                             <label>Anzeigeraum</label>
                             <input type="text" name="ROOM_NAME" value="{{ conf.get('ROOM_NAME', '') }}" maxlength="{{ room_max }}" required>
+                            {# Das Feld nimmt {{ room_max }} Zeichen an, in die Kopfzeile
+                               des Displays passen aber deutlich weniger. Ohne diesen
+                               Hinweis merkt man das erst nach dem Speichern - an den drei
+                               Punkten in der Vorschau. Die Spanne kommt aus
+                               anzeige.sichtbare_raumzeichen(), damit sie nicht von der
+                               tatsaechlichen Kopfzeile abweichen kann. #}
+                            <p class="feld-hinweis">Auf dem Schild sind je nach Buchstaben
+                               etwa {{ room_sichtbar[0] }} bis {{ room_sichtbar[1] }} Zeichen
+                               sichtbar, längere Namen werden gekürzt.</p>
                         </div>
                         <div class="form-group">
                             <label>Intervall (Sekunden, mind. {{ min_interval }})</label>
