@@ -32,12 +32,15 @@ class SitzungsAttrappe:
     """
 
     def __init__(self, notizblock, stunden=None, fehler_beim_login=None,
-                 fehler_beim_plan=None, raum_gefunden=True):
+                 fehler_beim_plan=None, raum_gefunden=True,
+                 fehler_beim_erweiterten_plan=None):
         self.notizen = notizblock
         self._stunden = stunden if stunden is not None else []
         self._fehler_login = fehler_beim_login
         self._fehler_plan = fehler_beim_plan
         self._raum_gefunden = raum_gefunden
+        # Nur der erweiterte Abruf scheitert - fuer den Ruecklauf-Test.
+        self._fehler_erweitert = fehler_beim_erweiterten_plan
 
     def login(self):
         self.notizen["angemeldet"] = True
@@ -52,6 +55,25 @@ class SitzungsAttrappe:
         return []
 
     def timetable(self, room, start, end):
+        # Der einfache Abruf. Er liefert keine Bemerkungsfelder - deshalb haelt
+        # die Attrappe fest, wenn das Programm ihn benutzt hat.
+        self.notizen["einfacher_abruf"] = True
+        if self._fehler_plan:
+            raise self._fehler_plan
+        return self._stunden
+
+    def timetable_extended(self, room, start, end):
+        """
+        Der erweiterte Abruf - der, den das Programm benutzen soll.
+
+        Die Attrappe MUSS ihn kennen. Fehlte er, wuerde der Aufruf im Programm
+        einen AttributeError ausloesen, der Ruecklauf griffe, und alle Tests
+        liefen weiterhin gruen durch den einfachen Abruf - ohne dass jemand
+        merkt, dass die Bemerkungsfelder nie ankommen.
+        """
+        self.notizen["erweiterter_abruf"] = True
+        if self._fehler_erweitert:
+            raise self._fehler_erweitert
         if self._fehler_plan:
             raise self._fehler_plan
         return self._stunden
@@ -202,3 +224,71 @@ def test_am_wochenende_wird_kein_plan_abgerufen(sitzung, conf):
     daten, meldung = R.get_current_lesson(conf)
     assert meldung == "Schönes Wochenende!"
     assert R.app_state.cached_lessons is None
+
+
+# ==============================================================================
+# Erweiterter Abruf: die Bemerkungsfelder
+# ==============================================================================
+# WebUntis gibt info, lstext und substText nur heraus, wenn der Abruf sie
+# ausdruecklich anfordert. Das Tuerschild rief lange die einfache Fassung ab -
+# und zeigte deshalb nie eine Bemerkung an, obwohl der Code dafuer vorhanden
+# war und die Texte bei Platzmangel sogar gestaffelt kuerzte.
+def test_der_erweiterte_abruf_wird_benutzt(sitzung, conf):
+    notizen = sitzung(stunden=[RohStunde(8, 0, 8, 45, "Mathematik")])
+    R.get_current_lesson(conf)
+
+    assert notizen.get("erweiterter_abruf") is True
+    assert "einfacher_abruf" not in notizen, \
+        "Der einfache Abruf liefert keine Bemerkungsfelder"
+
+
+def test_die_bemerkung_erreicht_die_anzeige(sitzung, conf):
+    """
+    Der eigentliche Zweck der Aenderung: Was die Lehrkraft in WebUntis
+    hineinschreibt, soll an der Tuer stehen.
+    """
+    sitzung(stunden=[RohStunde(8, 0, 8, 45, "Englisch",
+                               info="Vocabulary and grammar test")])
+    daten, _ = R.get_current_lesson(conf)
+
+    assert "Vocabulary and grammar test" in daten["current"].stunden_info
+
+
+def test_abgelehnte_optionen_kosten_nur_die_bemerkung_nicht_den_plan(sitzung, conf):
+    """
+    Lehnt ein Server die Zusatz-Optionen ab, ist der einfache Abruf besser als
+    gar keiner. Ein leeres Schild waere ein schlechter Tausch fuer ein
+    Bemerkungsfeld.
+    """
+    notizen = sitzung(stunden=[RohStunde(8, 0, 8, 45, "Mathematik")],
+                      fehler_beim_erweiterten_plan=RuntimeError("bad options"))
+    daten, _ = R.get_current_lesson(conf)
+
+    assert notizen.get("einfacher_abruf") is True
+    assert daten["current"].fach == "Mathematik"
+
+
+def test_bei_gesperrtem_kalender_wird_nicht_nachgefasst(sitzung, conf):
+    """
+    In den Ferien ist der zweite Versuch zwecklos - er kostet nur eine weitere
+    Anfrage, und der Fehler muss die Ferien-Erkennung erreichen statt im
+    Ruecklauf zu verschwinden.
+    """
+    notizen = sitzung(
+        fehler_beim_erweiterten_plan=Exception("no valid schoolyear found"))
+    daten, meldung = R.get_current_lesson(conf)
+
+    assert "Ferien" in meldung
+    assert "einfacher_abruf" not in notizen
+
+
+@pytest.mark.parametrize("text", ["no valid schoolyear found",
+                                  "kein gueltiges Schuljahr",
+                                  "date out of range",
+                                  "notAllowed"])
+def test_gesperrter_kalender_wird_an_allen_bekannten_wortlauten_erkannt(text):
+    assert untis.ist_ferien_fehler(Exception(text)) is True
+
+
+def test_ein_gewoehnlicher_fehler_gilt_nicht_als_ferien():
+    assert untis.ist_ferien_fehler(RuntimeError("connection reset")) is False
