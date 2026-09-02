@@ -4,6 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="color-scheme" content="light dark">
+    {# Die Seite wird serverseitig gebaut und hat kein JavaScript. Ohne dieses
+       Tag zeigte ein offen gelassener Tab bis in alle Ewigkeit den Zustand von
+       damals - Vorschaubild wie Statusliste. Der Browser lädt jetzt selbst
+       nach. Fehlt refresh_sekunden, bleibt es beim Verhalten von früher. #}
+    {% if refresh_sekunden %}<meta http-equiv="refresh" content="{{ refresh_sekunden }}">{% endif %}
     <title>Türschild-Admin</title>
     <style>
         /* ==================================================================

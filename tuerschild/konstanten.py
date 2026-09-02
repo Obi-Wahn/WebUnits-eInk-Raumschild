@@ -47,6 +47,7 @@ SIMULATION_MAX_SECONDS = 7200   # 2 Stunden
 HOLIDAYS_CACHE_SECONDS = 86400  # API-Schonung: Ferien für 24 Stunden im RAM cachen
 EXAMS_CACHE_SECONDS = 3600      # Klausurtermine ändern sich nicht im Minutentakt
 
+
 # Ab welchem Jahrgang eine Arbeit "Klausur" heißt. In der Unterstufe schreibt
 # man Klassenarbeiten, in der Oberstufe Klausuren - ein Wort, das an der Schule
 # niemand benutzt, fällt jeden Tag jedem auf, der am Schild vorbeigeht.
@@ -63,6 +64,22 @@ PRUEFUNG_KLAUSUR = "KLAUSUR"
 MIN_UPDATE_SECONDS = 300        # 5 Minuten
 MAX_UPDATE_SECONDS = 86400      # 24 Stunden
 DEFAULT_UPDATE_SECONDS = 900    # 15 Minuten
+
+# Wie oft die Bedienseite sich selbst neu lädt. Ohne das stand sie still: Was
+# im Browser zu sehen war, war der Zustand des Augenblicks, in dem die Seite
+# geladen wurde - beliebig lange. Besonders unangenehm bei der Statusliste, die
+# dann weiter "aktuell" behauptete, während das Schild längst aus der Rücklage
+# lief.
+# Der Wert ist MIN_UPDATE_SECONDS, also der kürzeste Takt, in dem sich das
+# Schild überhaupt ändern kann. Häufiger nachzuladen könnte gar nichts Neues
+# zeigen. Länger wäre ebenfalls vertretbar - der eingestellte Abruf ist ja meist
+# der 15-Minuten-Vorgabewert -, aber die Kopfzeile des Schilds trägt eine Uhr,
+# und die soll in der Vorschau nicht eine Viertelstunde falsch gehen.
+# Die Seite lädt dabei vollständig neu; eine angefangene Eingabe im Formular
+# geht dadurch verloren. Genau deshalb ist der Takt nicht kürzer, und genau
+# deshalb unterbleibt das Neuladen, solange eine Rückmeldung zum Speichern auf
+# der Seite steht.
+UI_REFRESH_SECONDS = MIN_UPDATE_SECONDS
 
 # Grenzen fuer den Raumnamen aus dem Web-Formular.
 # Der Name geht als Suchbegriff an WebUntis und steht in der Kopfzeile des

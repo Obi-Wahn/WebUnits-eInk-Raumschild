@@ -28,7 +28,8 @@ from .konstanten import (DEFAULT_UPDATE_SECONDS, FAILED_LOGIN_MAX,
                          FAILED_LOGIN_TTL, LOGIN_LOCKOUT_SECONDS,
                          MAX_LOGIN_ATTEMPTS, MAX_UPDATE_SECONDS,
                          MIN_UPDATE_SECONDS, ROOM_NAME_MAX_LEN,
-                         STALE_ALERT_SECONDS, TRUSTED_PROXIES)
+                         STALE_ALERT_SECONDS, TRUSTED_PROXIES,
+                         UI_REFRESH_SECONDS)
 from .steuerung import run_display_test_sequence
 from .zustand import app_state
 
@@ -286,6 +287,10 @@ def index():
         stoerung_lang=stoerung_lang,
         save_error=save_error,
         save_ok=save_ok,
+        # Kein Selbstneuladen, solange eine Rückmeldung zum Speichern auf der
+        # Seite steht: Sie würde weggezogen, bevor sie gelesen ist - und wer
+        # gerade gespeichert hat, sitzt oft noch am Formular.
+        refresh_sekunden=None if (save_ok or save_error) else UI_REFRESH_SECONDS,
         room_max=ROOM_NAME_MAX_LEN,
         # Die Spanne wird aus der echten Kopfzeilen-Geometrie gerechnet, nicht
         # im Formular eingetragen: eine feste Zahl im Text waere still falsch
