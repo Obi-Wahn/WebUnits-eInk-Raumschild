@@ -21,7 +21,8 @@ from .konfiguration import get_now
 from .konstanten import (STATUS_LABELS, UI_BADGE_GAP, UI_BADGE_PADDING,
                          UI_BLOCK_DANACH_Y, UI_BLOCK_JETZT_Y, UI_ELLIPSIS,
                          UI_HEADER_GAP, UI_HEADER_HEIGHT, UI_HEIGHT, UI_LINE_Y,
-                         UI_MARGIN, UI_WIDTH)
+                         UI_MARGIN, UI_STALE_ZEICHEN, UI_WIDTH,
+                         WOCHENTAGE_KURZ)
 from .zustand import Lesson, app_state
 
 def get_text_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont) -> int:
@@ -237,15 +238,21 @@ def zeichne_anzeige(data: Optional[Dict[str, Optional[Lesson]]], message: str, c
 
     rechter_rand = UI_WIDTH - UI_MARGIN
 
-    # Offline-Hinweis: invertiertes Ausrufezeichen ganz rechts in der Kopfzeile.
-    # Bewusst sehr klein gehalten - auf 250x122 Pixeln ist jeder Pixel knapp,
-    # und der Stundenplan selbst bleibt die wichtigere Information.
+    # Offline-Hinweis ganz rechts in der Kopfzeile: ein invertiertes
+    # Warndreieck. Die Kastenbreite folgt der Zeichenbreite, damit ein anderes
+    # Zeichen in UI_STALE_ZEICHEN nicht aus dem Kasten laeuft.
     if stale:
-        draw.rectangle((UI_WIDTH - 13, 4, UI_WIDTH - 3, UI_HEADER_HEIGHT - 5), fill=255)
-        draw.text((UI_WIDTH - 10, 4), "!", font=f_small, fill=0)
-        rechter_rand = UI_WIDTH - 16
+        zeichen_breite = get_text_width(draw, UI_STALE_ZEICHEN, f_med)
+        kasten_links = rechter_rand - zeichen_breite - 2 * UI_BADGE_PADDING
+        draw.rectangle((kasten_links, 4, rechter_rand, UI_HEADER_HEIGHT - 5), fill=255)
+        draw.text((kasten_links + UI_BADGE_PADDING, 3), UI_STALE_ZEICHEN,
+                  font=f_med, fill=0)
+        rechter_rand = kasten_links - UI_BADGE_GAP
 
-    time_str = now.strftime("%d.%m.%Y %H:%M")
+    # Der Wochentag steht vorn: Im Schulalltag ist er die Angabe, die man am
+    # ehesten aus dem Blick verliert.
+    time_str = (f"{WOCHENTAGE_KURZ[now.weekday()]} "
+                f"{now.strftime('%d.%m.%Y %H:%M')}")
     zeit_x = rechter_rand - get_text_width(draw, time_str, f_small)
     draw.text((zeit_x, 5), time_str, font=f_small, fill=255)
 

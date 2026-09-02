@@ -8,6 +8,9 @@ richtige Information erhalten bleibt.
 Gezeichnet wird mit echtem Pillow, aber in einen Speicherpuffer (siehe
 conftest.py). Layoutfehler fallen dadurch auf, ohne das Panel zu beruehren.
 """
+import datetime
+import os
+
 import pytest
 
 import tuerschild as R
@@ -252,9 +255,20 @@ def test_offline_markierung_und_uhrzeit_ueberschneiden_sich_nicht(conf, display_
     R.update_display_logic(daten, "", conf, stale=True)
     pixel = display_attrappe.letztes_bild.load()
 
-    # Von der linken Kante des Hinweiskastens aus nach links laufen: bis zur
-    # Uhrzeit muessen ein paar Spalten durchgehend schwarz (leer) sein.
-    kasten_links = R.UI_WIDTH - 13
+    # Die linke Kante des Hinweiskastens im Bild suchen, statt sie
+    # auszurechnen: Der Kasten waechst mit dem Zeichen, ein fester Wert waere
+    # beim naechsten anderen Zeichen falsch.
+    #
+    # Erkannt wird er an seiner OBERKANTE (y=4). Sie gehoert zum weissen
+    # Rechteck, und das Zeichen darin reicht nicht bis dorthin - eine Messzeile
+    # weiter unten wuerde vom Zeichen selbst unterbrochen.
+    kasten_links = R.UI_WIDTH - R.UI_MARGIN
+    while kasten_links > R.UI_MARGIN and pixel[kasten_links - 1, 4]:
+        kasten_links -= 1
+    assert kasten_links < R.UI_WIDTH - R.UI_MARGIN, "Kein Hinweiskasten gefunden"
+
+    # Von dort nach links laufen: bis zur Uhrzeit muessen ein paar Spalten
+    # durchgehend schwarz (leer) sein.
     leere_spalten = 0
     for x in range(kasten_links - 1, R.UI_MARGIN, -1):
         if any(pixel[x, y] for y in range(2, R.UI_HEADER_HEIGHT - 2)):
@@ -455,3 +469,122 @@ def test_die_uhrzeit_steht_rechtsbuendig(conf, display_attrappe):
         f"Die Uhrzeit endet schon bei x={letzte}, der Rand liegt bei "
         f"{R.UI_WIDTH - R.UI_MARGIN}"
     )
+
+
+# ==============================================================================
+# Wochentag und Offline-Zeichen in der Kopfzeile
+# ==============================================================================
+def _kopfzeile_hat_text(bild, x_von, x_bis):
+    pixel = bild.load()
+    return any(pixel[x, y] for x in range(x_von, x_bis)
+               for y in range(2, R.UI_HEADER_HEIGHT - 2))
+
+
+@pytest.mark.parametrize("tag, kuerzel", [
+    (datetime.date(2026, 8, 31), "Mo"),
+    (datetime.date(2026, 9, 2), "Mi"),
+    (datetime.date(2026, 9, 6), "So"),
+])
+def test_der_wochentag_wird_richtig_bestimmt(tag, kuerzel):
+    """
+    Im Schulalltag ist der Wochentag die Angabe, die man am ehesten aus dem
+    Blick verliert - deshalb steht er vorn in der Kopfzeile.
+    """
+    assert R.WOCHENTAGE_KURZ[tag.weekday()] == kuerzel
+
+
+def test_die_wochentage_sind_deutsch_und_vollstaendig():
+    """
+    Sie stehen als feste Liste im Programm und kommen NICHT aus strftime("%a").
+    Sonst haenge die Ausgabe an der Locale des Systems: Auf einem frisch
+    aufgesetzten Pi stuende dort "Wed" statt "Mi" - und im Testlauf faellt das
+    nicht auf, weil die Testrechner ihre eigene Locale mitbringen.
+    """
+    assert R.WOCHENTAGE_KURZ == ("Mo", "Di", "Mi", "Do", "Fr", "Sa", "So")
+
+    quelle = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                               "tuerschild", "anzeige.py"), encoding="utf-8").read()
+    assert "%a" not in quelle, "Der Wochentag kommt aus strftime und damit aus der Locale"
+
+
+def test_der_wochentag_steht_auf_dem_display(conf, display_attrappe):
+    """
+    Verdrahtung: Die Liste kann richtig sein und trotzdem ungenutzt bleiben.
+
+    Gemessen wird die BREITE des rechten Textblocks und mit der Breite des
+    blossen Datums verglichen. Eine erste Fassung prueft, wo der Block
+    ANFAENGT - und blieb gruen, als ich den Wochentag versuchsweise wieder
+    herausnahm: Der Block ist rechtsbuendig, seine linke Kante verschiebt sich
+    zwar, aber nicht ueber die Schwelle, die ich geraten hatte.
+    """
+    from PIL import Image, ImageDraw
+    R.init_fonts()
+    messer = ImageDraw.Draw(Image.new("1", (10, 10)))
+    nur_datum = R.get_text_width(messer, "02.09.2026 10:15",
+                                 R.app_state.global_fonts["small"])
+
+    R.app_state.simulated_datetime = uhrzeit(10, 15)
+    R.update_display_logic(None, "Raum ist frei", {**conf, "ROOM_NAME": "R1"})
+    pixel = display_attrappe.letztes_bild.load()
+
+    def beschriftet(x):
+        return any(pixel[x, y] for y in range(2, R.UI_HEADER_HEIGHT - 2))
+
+    # Die Kopfzeile hat genau eine grosse Luecke: die zwischen Raumname und
+    # Zeitangabe. Rechts davon liegt der gesuchte Block. Innerhalb des Blocks
+    # gibt es kleinere Luecken (zwischen Wochentag und Datum etwa sechs
+    # Spalten) - eine feste kleine Schwelle wuerde dort faelschlich trennen.
+    spalten = [x for x in range(R.UI_MARGIN, R.UI_WIDTH) if beschriftet(x)]
+    _, links = max(zip(spalten, spalten[1:]), key=lambda paar: paar[1] - paar[0])
+    rechts = spalten[-1]
+
+    breite = rechts - links + 1
+    assert breite > nur_datum + 8, (
+        f"Der Zeitblock ist nur {breite} Pixel breit; das Datum allein braucht "
+        f"schon {nur_datum}. Fehlt der Wochentag?"
+    )
+
+
+def test_das_offline_zeichen_ist_kein_ersatzkaestchen():
+    """
+    Sanduhr, Stoppuhr und Armbanduhr fehlen in DejaVu Sans. Ein fehlendes
+    Zeichen wird als leeres Rechteck gezeichnet - auf dem Schild also ein
+    sinnloser Kasten, der aussaehe, als sei etwas kaputt.
+    """
+    from PIL import Image, ImageDraw
+    R.init_fonts()
+    draw = ImageDraw.Draw(Image.new("1", (40, 30), 255))
+    f_med = R.app_state.global_fonts["med"]
+
+    def gezeichnet(zeichen):
+        bild = Image.new("1", (40, 30), 255)
+        ImageDraw.Draw(bild).text((2, 2), zeichen, font=f_med, fill=0)
+        return bild.tobytes()
+
+    # U+E000 liegt im privaten Bereich und fehlt jeder Schrift
+    assert gezeichnet(R.UI_STALE_ZEICHEN) != gezeichnet(""), (
+        f"'{R.UI_STALE_ZEICHEN}' fehlt in der Schrift und ergibt ein Ersatzkästchen"
+    )
+    assert gezeichnet(R.UI_STALE_ZEICHEN) != gezeichnet(" "), "Das Zeichen ist leer"
+
+
+def test_der_hinweiskasten_waechst_mit_dem_zeichen(conf, display_attrappe, monkeypatch):
+    """
+    Die Kastenbreite wird aus der Zeichenbreite gerechnet. Ein fester Wert
+    passte immer nur zu genau einem Zeichen - und beim naechsten liefe es
+    heraus.
+    """
+    R.app_state.simulated_datetime = uhrzeit(10, 15)
+
+    def kastenbreite():
+        pixel = display_attrappe.letztes_bild.load()
+        return sum(1 for x in range(R.UI_WIDTH) if pixel[x, 4])
+
+    R.update_display_logic(None, "Raum ist frei", conf, stale=True)
+    schmal = kastenbreite()
+
+    monkeypatch.setattr(R.anzeige, "UI_STALE_ZEICHEN", "MMM")
+    R.update_display_logic(None, "Raum ist frei", conf, stale=True)
+    breit = kastenbreite()
+
+    assert breit > schmal + 10, f"Kasten wächst nicht mit: {schmal} -> {breit}"

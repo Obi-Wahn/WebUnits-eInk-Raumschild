@@ -109,6 +109,23 @@ UI_BADGE_PADDING = 3            # Luft links und rechts im Status-Kasten
 UI_BADGE_GAP = 5                # Abstand zwischen Status-Kasten und Fachname
 UI_ELLIPSIS = "…"               # Zeichen für gekürzte Texte (U+2026)
 
+# Kurzform der Wochentage fuer die Kopfzeile.
+# Bewusst als feste Liste und nicht ueber strftime("%a"): Das Ergebnis haenge
+# sonst von der eingestellten Locale des Systems ab - auf einem frisch
+# aufgesetzten Pi stuende dort "Wed" statt "Mi", und im Testlauf faellt das
+# nicht auf, weil die Testrechner ihre eigene Locale mitbringen.
+WOCHENTAGE_KURZ = ("Mo", "Di", "Mi", "Do", "Fr", "Sa", "So")
+
+# Zeichen fuer "die Daten stammen aus der Ruecklage", oben rechts im Kopf.
+#
+# WARUM AUSGERECHNET DIESES: Auf 1 Bit und rund 14 Pixel Hoehe bleiben wenige
+# Zeichen ueberhaupt erkennbar. Sanduhr, Stoppuhr und Armbanduhr enthaelt
+# DejaVu Sans gar nicht - sie ergaeben ein leeres Ersatzkaestchen. Die
+# Kreisbogen-Pfeile zerfallen bei dieser Groesse zu einem Klecks. Das
+# Warndreieck bleibt lesbar und braucht keine Sprache; ein blosses "!" war
+# zwar deutlich, sagte aber nur "Achtung" und nicht, worum es geht.
+UI_STALE_ZEICHEN = "⚠"
+
 # Beschriftung der invertierten Status-Kästen. Die Kastenbreite wird zur
 # Laufzeit aus der Textbreite berechnet, diese Texte sind also frei änderbar.
 STATUS_LABELS = {

@@ -38,7 +38,8 @@ from .konstanten import (BACKGROUND_ERROR_PAUSE, DEFAULT_UPDATE_SECONDS,
                          TRUSTED_PROXIES,
                          UI_BADGE_GAP, UI_BADGE_PADDING,
                          UI_BLOCK_DANACH_Y, UI_BLOCK_JETZT_Y, UI_ELLIPSIS,
-                         UI_HEADER_GAP,
+                         UI_HEADER_GAP, UI_STALE_ZEICHEN,
+                         WOCHENTAGE_KURZ,
                          UI_HEADER_HEIGHT, UI_HEIGHT, UI_LINE_Y, UI_MARGIN,
                          UI_WIDTH, WAVESHARE_LIB)
 from .zustand import AppState, Lesson, TimedLesson, app_state
