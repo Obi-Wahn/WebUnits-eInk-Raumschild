@@ -19,7 +19,8 @@ from . import hardware
 from .hardware import init_fonts
 from .konfiguration import get_now
 from .konstanten import (STATUS_LABELS, UI_BADGE_GAP, UI_BADGE_PADDING,
-                         UI_ELLIPSIS, UI_HEADER_HEIGHT, UI_HEIGHT, UI_LINE_Y,
+                         UI_BLOCK_DANACH_Y, UI_BLOCK_JETZT_Y, UI_ELLIPSIS,
+                         UI_HEADER_GAP, UI_HEADER_HEIGHT, UI_HEIGHT, UI_LINE_Y,
                          UI_MARGIN, UI_WIDTH)
 from .zustand import Lesson, app_state
 
@@ -95,6 +96,46 @@ def build_detail_line(draw: ImageDraw.ImageDraw, lesson: Lesson, font, max_width
 
     # Auch für sich allein ist das wichtigste Stück noch zu breit
     return truncate_to_width(draw, info or klasse or lehrkraft, font, max_width)
+
+def zeichne_meldung(draw: ImageDraw.ImageDraw, message: str, schriften) -> None:
+    """
+    Setzt eine Meldung ("Raum ist frei", "Unterrichtsende") so gross wie
+    moeglich und mittig in den freien Bereich unter der Kopfzeile.
+
+    WARUM DAS NOETIG WAR:
+    Frueher stand hier eine feste Schriftgroesse von 16 Pixeln, und der Text
+    begann bei y=60. Darueber blieben 36, darunter 46 Pixel leer. Ausgerechnet
+    der Zustand, den man ausserhalb der Unterrichtszeiten am haeufigsten sieht,
+    nutzte das Panel also am schlechtesten - und aus zwei Metern Entfernung war
+    er unnoetig klein. Die groesste geladene Schrift (24 Pixel) kam im
+    Zeichencode ueberhaupt nicht vor.
+
+    'schriften' kommt von gross nach klein. Genommen wird die erste, in die
+    JEDE Zeile passt: "Unterrichtsende" braucht bei 24 Pixeln 220 von 240
+    verfuegbaren und bleibt gross, "Schoenes Wochenende!" braeuchte 305 und
+    faellt deshalb eine Stufe zurueck.
+    """
+    zeilen = (message or "").split("\n")
+    verfuegbar = UI_WIDTH - 2 * UI_MARGIN
+
+    for schrift in schriften:
+        if all(get_text_width(draw, z, schrift) <= verfuegbar for z in zeilen):
+            break
+    else:
+        # Auch die kleinste Stufe reicht nicht - dann wird gekuerzt.
+        schrift = schriften[-1]
+        zeilen = [truncate_to_width(draw, z, schrift, verfuegbar) for z in zeilen]
+
+    zeilenhoehe = schrift.size + 5
+    frei = UI_HEIGHT - UI_HEADER_HEIGHT
+    y = UI_HEADER_HEIGHT + (frei - zeilenhoehe * len(zeilen)) // 2
+
+    for zeile in zeilen:
+        breite = get_text_width(draw, zeile, schrift)
+        x = (UI_WIDTH - breite) / 2 if breite < UI_WIDTH else 2
+        draw.text((x, y), zeile, font=schrift, fill=0)
+        y += zeilenhoehe
+
 
 def draw_lesson_block(draw: ImageDraw.ImageDraw, lesson: Lesson, y_offset: int, label_text: str, f_small, f_reg, f_med) -> None:
     """
@@ -176,6 +217,7 @@ def zeichne_anzeige(data: Optional[Dict[str, Optional[Lesson]]], message: str, c
 
     init_fonts()
     f_mega = app_state.global_fonts['mega']
+    f_huge = app_state.global_fonts['huge']
     f_large = app_state.global_fonts['large']
     f_med = app_state.global_fonts['med']
     f_reg = app_state.global_fonts['reg']
@@ -184,10 +226,16 @@ def zeichne_anzeige(data: Optional[Dict[str, Optional[Lesson]]], message: str, c
     now = get_now()
 
     # --- KOPFZEILE ---
+    # Von rechts nach links aufgebaut: erst das Ausrufezeichen, dann die
+    # Uhrzeit, und der Raumname bekommt, was uebrig bleibt.
+    #
+    # WARUM NICHT MEHR MIT FESTEN X-WERTEN: Die Uhrzeit stand frueher starr auf
+    # x=120, und der Raumname wurde gar nicht gekuerzt. Ab etwa neun breiten
+    # Zeichen schrieben sich beide uebereinander - im Formular erlaubt sind
+    # aber 40 Zeichen. "Chemie-Vorbereitung" ergab unlesbaren Matsch.
     draw.rectangle((0, 0, UI_WIDTH, UI_HEADER_HEIGHT), fill=0)
-    draw.text((UI_MARGIN, 3), conf.get('ROOM_NAME', 'Unbekannt'), font=f_med, fill=255)
-    time_str = now.strftime("%d.%m.%Y %H:%M")
-    draw.text((120, 5), time_str, font=f_small, fill=255)
+
+    rechter_rand = UI_WIDTH - UI_MARGIN
 
     # Offline-Hinweis: invertiertes Ausrufezeichen ganz rechts in der Kopfzeile.
     # Bewusst sehr klein gehalten - auf 250x122 Pixeln ist jeder Pixel knapp,
@@ -195,6 +243,15 @@ def zeichne_anzeige(data: Optional[Dict[str, Optional[Lesson]]], message: str, c
     if stale:
         draw.rectangle((UI_WIDTH - 13, 4, UI_WIDTH - 3, UI_HEADER_HEIGHT - 5), fill=255)
         draw.text((UI_WIDTH - 10, 4), "!", font=f_small, fill=0)
+        rechter_rand = UI_WIDTH - 16
+
+    time_str = now.strftime("%d.%m.%Y %H:%M")
+    zeit_x = rechter_rand - get_text_width(draw, time_str, f_small)
+    draw.text((zeit_x, 5), time_str, font=f_small, fill=255)
+
+    raum = truncate_to_width(draw, conf.get('ROOM_NAME', 'Unbekannt'), f_med,
+                             zeit_x - UI_MARGIN - UI_HEADER_GAP)
+    draw.text((UI_MARGIN, 3), raum, font=f_med, fill=255)
 
     # --- HAUPTBEREICH (Unterricht) ---
     if data and (data.get('current') or data.get('next')):
@@ -202,36 +259,24 @@ def zeichne_anzeige(data: Optional[Dict[str, Optional[Lesson]]], message: str, c
         next_lesson = data.get('next')
 
         if curr_lesson:
-            draw_lesson_block(draw, curr_lesson, 30, "JETZT:", f_small, f_reg, f_med)
+            draw_lesson_block(draw, curr_lesson, UI_BLOCK_JETZT_Y, "JETZT:", f_small, f_reg, f_med)
         else:
-            draw.text((UI_MARGIN, 35), message, font=f_large, fill=0)
+            draw.text((UI_MARGIN, UI_BLOCK_JETZT_Y + 8), message, font=f_large, fill=0)
 
         draw.line((UI_MARGIN, UI_LINE_Y, UI_WIDTH - UI_MARGIN, UI_LINE_Y), fill=0, width=1)
 
         if next_lesson:
-            draw_lesson_block(draw, next_lesson, 74, "DANACH:", f_small, f_reg, f_med)
+            draw_lesson_block(draw, next_lesson, UI_BLOCK_DANACH_Y, "DANACH:", f_small, f_reg, f_med)
         else:
             msg_text = "Kein Unterricht mehr heute." if "Unterrichtsende" not in message else "Bis morgen!"
-            draw.text((UI_MARGIN, 74), "DANACH:", font=f_small, fill=0)
-            draw.text((UI_MARGIN, 90), msg_text, font=f_reg, fill=0)
+            draw.text((UI_MARGIN, UI_BLOCK_DANACH_Y), "DANACH:", font=f_small, fill=0)
+            draw.text((UI_MARGIN, UI_BLOCK_DANACH_Y + 16), msg_text, font=f_reg, fill=0)
 
     # --- HAUPTBEREICH (Freistunde / Ferien) ---
     else:
-        # Wir handhaben mehrzeilige Strings (\n), damit lange Texte 
-        # (wie "Unterrichtsfrei!\n(Ferienzeit)") sauber und mittig auf 
-        # das schmale Display passen.
-        if "\n" in message:
-            lines = message.split("\n")
-            y_pos = 45
-            for line in lines:
-                text_w = get_text_width(draw, line, f_mega)
-                x_pos = (UI_WIDTH - text_w) / 2 if text_w < UI_WIDTH else 2
-                draw.text((x_pos, y_pos), line, font=f_mega, fill=0)
-                y_pos += 24 
-        else:
-            text_w = get_text_width(draw, message, f_mega)
-            x_pos = (UI_WIDTH - text_w) / 2 if text_w < UI_WIDTH else 2
-            draw.text((x_pos, 60), message, font=f_mega, fill=0)
+        # Mehrzeilige Texte (wie "Unterrichtsfrei!\n(Ferienzeit)") werden
+        # ebenso behandelt wie einzeilige: so gross wie moeglich, mittig.
+        zeichne_meldung(draw, message, (f_huge, f_large, f_mega))
 
     return image
 
