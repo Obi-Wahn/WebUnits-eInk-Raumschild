@@ -186,6 +186,47 @@ def get_offline_fallback(conf: Dict[str, Any]) -> Optional[Tuple[Dict[str, Optio
     # bereits vollständig ausgelesen, es wird also nichts nachgeladen.
     return select_lessons(cached_lessons, conf, now)
 
+def ist_ferien_fehler(fehler: Exception) -> bool:
+    """
+    Erkennt die Fehler, mit denen WebUntis einen gesperrten Kalender meldet.
+
+    Ausserhalb des Schuljahres gibt der Server den Stundenplan nicht heraus,
+    sondern antwortet mit einem Fehler. Fuer das Schild ist das keine Stoerung,
+    sondern schlicht: Ferien.
+    """
+    text = str(fehler).lower()
+    return any(hinweis in text for hinweis in
+               ("schoolyear", "schuljahr", "no valid", "date", "notallowed"))
+
+def hole_stundenplan(session, raum, tag):
+    """
+    Holt den Tagesplan des Raums - moeglichst in der erweiterten Fassung.
+
+    WARUM ERWEITERT: Die Bemerkungsfelder (info, lstext, substText) gibt
+    WebUntis nur heraus, wenn der Abruf sie ausdruecklich anfordert. Der
+    einfache Aufruf liefert sie nicht - an einer echten Schule nachgemessen:
+    75 Stunden, kein einziges Bemerkungsfeld, waehrend dieselben 75 Stunden
+    erweitert abgerufen Texte wie "Vocabulary and grammar test" enthielten.
+    Das Tuerschild bereitet solche Texte auf und kuerzt sie bei Platzmangel
+    gestaffelt - nur kamen sie bis dahin nie an. Beide Aufrufe gehen an
+    dieselbe Schnittstelle und brauchen dieselben Rechte; der erweiterte
+    schickt nur zusaetzliche Optionen mit.
+
+    WARUM MIT RUECKFALL: Lehnt ein Server diese Optionen ab, waere ohne
+    Ruecklage der ganze Plan weg. Ein leeres Schild ist ein schlechter Tausch
+    fuer ein Bemerkungsfeld - dann lieber der einfache Aufruf ohne die Texte.
+    Ein gesperrter Kalender wird davon ausgenommen: Dort ist der zweite
+    Versuch zwecklos, und der Fehler soll die Ferien-Erkennung erreichen.
+    """
+    try:
+        return session.timetable_extended(room=raum, start=tag, end=tag)
+    except Exception as fehler:
+        if ist_ferien_fehler(fehler):
+            raise
+        logging.warning("Erweiterter Stundenplan-Abruf fehlgeschlagen (%s) - "
+                        "einfacher Abruf ohne Bemerkungsfelder.", fehler)
+        return session.timetable(room=raum, start=tag, end=tag)
+
 def get_current_lesson(conf: Dict[str, Any]) -> Tuple[Optional[Dict[str, Optional[Lesson]]], str]:
     """
     Hauptfunktion der Daten-Ebene: Verbindet sich mit der WebUntis-API, lädt den
@@ -251,12 +292,11 @@ def get_current_lesson(conf: Dict[str, Any]) -> Tuple[Optional[Dict[str, Optiona
             return {"current": None, "next": None}, "Schönes Wochenende!"
             
         try:
-            timetable = session.timetable(room=rooms[0], start=today, end=today)
+            timetable = hole_stundenplan(session, rooms[0], today)
         except Exception as e:
             # WebUntis sperrt oft den Kalender in den Sommerferien hart ab.
             # Statt eines Absturzes werten wir den Error-String aus und zeigen Ferien an.
-            err_str = str(e).lower()
-            if "schoolyear" in err_str or "schuljahr" in err_str or "no valid" in err_str or "date" in err_str or "notallowed" in err_str:
+            if ist_ferien_fehler(e):
                 return {"current": None, "next": None}, "Unterrichtsfrei!\n(Ferienzeit)"
             logging.error(f"Unerwarteter WebUntis Stundenplan-Fehler: {e}")
             raise e
