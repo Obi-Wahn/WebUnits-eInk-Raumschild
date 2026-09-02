@@ -45,6 +45,14 @@ FAILED_LOGIN_MAX = 1000         # harte Obergrenze gegen unbegrenztes Wachstum
 # erkennbar, weil ein plausibles Datum in der Kopfzeile steht.
 SIMULATION_MAX_SECONDS = 7200   # 2 Stunden
 HOLIDAYS_CACHE_SECONDS = 86400  # API-Schonung: Ferien für 24 Stunden im RAM cachen
+EXAMS_CACHE_SECONDS = 3600      # Klausurtermine ändern sich nicht im Minutentakt
+
+# Ab welchem Jahrgang eine Arbeit "Klausur" heißt. In der Unterstufe schreibt
+# man Klassenarbeiten, in der Oberstufe Klausuren - ein Wort, das an der Schule
+# niemand benutzt, fällt jeden Tag jedem auf, der am Schild vorbeigeht.
+PRUEFUNG_AB_JAHRGANG = 11
+PRUEFUNG_KLASSENARBEIT = "KLASSENARBEIT"
+PRUEFUNG_KLAUSUR = "KLAUSUR"
 
 # Grenzen für das automatische Abrufintervall.
 # Der Mindestwert schützt den WebUntis-Server: Wenn an einer Schule dutzende

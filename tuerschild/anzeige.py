@@ -139,6 +139,26 @@ def zeichne_meldung(draw: ImageDraw.ImageDraw, message: str, schriften) -> None:
         y += zeilenhoehe
 
 
+def waehle_etikett(lesson: Lesson) -> Optional[str]:
+    """
+    Bestimmt, welches Wort in den Etikettenkasten kommt - es ist nur einer da.
+
+    Die Reihenfolge ist keine Geschmacksfrage, sondern folgt daraus, was jemand
+    vor der Tuer wissen muss:
+
+      1. AUSFALL schlaegt alles. Eine ausgefallene Arbeit findet nicht statt;
+         stuende dort "KLASSENARBEIT", wuerde das Schild zum Klopfen abhalten,
+         obwohl der Raum leer ist.
+      2. Die Arbeit schlaegt VERTRETUNG. Dass drinnen geschrieben wird, ist die
+         wichtigere Auskunft; wer die Vertretung angeht, weiss ohnehin davon.
+      3. Sonst bleibt es beim bisherigen Status.
+    """
+    if lesson.status_code == 'cancelled':
+        return STATUS_LABELS['cancelled']
+    if lesson.pruefung:
+        return lesson.pruefung
+    return STATUS_LABELS.get(lesson.status_code)
+
 def draw_lesson_block(draw: ImageDraw.ImageDraw, lesson: Lesson, y_offset: int, label_text: str, f_small, f_reg, f_med) -> None:
     """
     Zeichnet einen strukturierten Unterrichtsblock (JETZT oder DANACH) als Grafik.
@@ -147,8 +167,6 @@ def draw_lesson_block(draw: ImageDraw.ImageDraw, lesson: Lesson, y_offset: int, 
     """
     header_text = f"{label_text} {lesson.stunde} ({lesson.zeit})"
     draw.text((UI_MARGIN, y_offset), header_text, font=f_small, fill=0) 
-    
-    status = lesson.status_code
     
     # PÄDAGOGISCHER HINTERGRUND (Layout-Optimierung):
     # Wir teilen den verfügbaren Platz im Stundenblock in zwei Zeilen auf, 
@@ -162,7 +180,7 @@ def draw_lesson_block(draw: ImageDraw.ImageDraw, lesson: Lesson, y_offset: int, 
         
     # ZEILE 1: Tag (Ausfall/Vertretung) und das Fach
     # "FÄLLT AUS" wurde zu "AUSFALL" gekürzt, damit längere Fachnamen daneben passen.
-    label = STATUS_LABELS.get(status)
+    label = waehle_etikett(lesson)
 
     if label:
         # Die Breite des schwarzen Kastens wird aus der tatsächlichen Textbreite

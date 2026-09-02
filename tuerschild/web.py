@@ -318,8 +318,13 @@ def vorschau_beschreibung(data, meldung: str) -> str:
                  lesson.fach_lang or lesson.fach, lesson.klasse]
         if lesson.lehrer:
             teile.append(lesson.lehrer)
+        # Dieselbe Rangfolge wie im Etikettenkasten des Displays. Die
+        # Beschreibung soll das Bild wiedergeben, nicht eine zweite Meinung
+        # dazu haben.
         if lesson.status_code == "cancelled":
             teile.append("fällt aus")
+        elif lesson.pruefung:
+            teile.append(lesson.pruefung.capitalize())
         elif lesson.status_code == "irregular":
             teile.append("Vertretung")
         return ", ".join(t for t in teile if t)

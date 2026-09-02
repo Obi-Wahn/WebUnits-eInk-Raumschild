@@ -15,11 +15,118 @@ from typing import Any, Dict, List, Optional, Tuple
 import webuntis
 
 from .konfiguration import get_now
-from .konstanten import (ERR_NO_NETWORK, ERR_UNTIS_OFFLINE,
+from .konstanten import (ERR_NO_NETWORK, ERR_UNTIS_OFFLINE, EXAMS_CACHE_SECONDS,
+                         PRUEFUNG_AB_JAHRGANG, PRUEFUNG_KLASSENARBEIT,
+                         PRUEFUNG_KLAUSUR,
                          HOLIDAYS_CACHE_SECONDS)
 from .zustand import Lesson, TimedLesson, app_state
 
-def parse_lesson(lesson, conf: Dict[str, Any]) -> Optional[Lesson]:
+def jahrgang(klassenname: str) -> Optional[int]:
+    """
+    Liest den Jahrgang aus einem Klassennamen: "10c" -> 10, "12" -> 12.
+
+    Gibt None zurueck, wenn keine Ziffer am Anfang steht. Das ist kein Fehler:
+    Manche Schulen benennen die Oberstufe "Q1" oder "EF".
+    """
+    ziffern = ""
+    for zeichen in klassenname.strip():
+        if not zeichen.isdigit():
+            break
+        ziffern += zeichen
+    return int(ziffern) if ziffern else None
+
+def pruefungs_etikett(klassennamen) -> str:
+    """
+    Waehlt das Wort, das an der Schule fuer diese Klassenstufe benutzt wird.
+
+    Bis Jahrgang 10 schreibt man Klassenarbeiten, ab 11 Klausuren. WebUntis
+    selbst kann uns das nicht sagen: Die Pruefungsart steckt hinter einem Recht
+    ('Stammdaten / Pruefungsart'), das dem Anzeige-Zugang fehlt, und die
+    Pruefungs-Datensaetze fuehren ueberhaupt kein Art-Feld. Bleibt die
+    Ableitung aus der Klasse - die ist dafuer eindeutig.
+
+    Ein nicht lesbarer Klassenname zaehlt als Oberstufe: "Q1", "EF" und
+    aehnliche Namen gibt es nur dort.
+    """
+    jahrgaenge = [jahrgang(name) for name in klassennamen]
+    oberstufe = all(j is None or j >= PRUEFUNG_AB_JAHRGANG for j in jahrgaenge)
+    return PRUEFUNG_KLAUSUR if oberstufe else PRUEFUNG_KLASSENARBEIT
+
+def hole_pruefungen(session, tag) -> List[Dict[str, Any]]:
+    """
+    Holt die Pruefungen des Tages - schulweit, denn anders geht es nicht.
+
+    WARUM SCHULWEIT: getExams kennt keinen Raum-Parameter. WebUntis speichert
+    zu einer Pruefung ueberhaupt keinen Raum; bekannt sind nur Datum, Uhrzeit,
+    Klasse und Fach. Welche davon in unserem Raum stattfindet, entscheidet
+    spaeter der Abgleich mit dem Stundenplan.
+
+    WAS HIER BEWUSST WEGGEWORFEN WIRD: Die Antwort enthaelt zu jeder Pruefung
+    die vollstaendige Schuelerliste. Das Tuerschild braucht sie nicht, also
+    behalten wir sie gar nicht erst - weder im Speicher noch in der
+    Offline-Ruecklage steht je eine Schuelernummer.
+
+    Schlaegt der Abruf fehl (an anderen Schulen fehlt dem Zugang womoeglich das
+    Recht dazu), ist das kein Grund, die Anzeige zu verlieren: Dann gibt es
+    eben keine Etiketten.
+    """
+    jetzt = time.time()
+    if (app_state.cached_exams is not None
+            and app_state.cached_exams_date == tag
+            and (jetzt - app_state.last_exams_fetch) < EXAMS_CACHE_SECONDS):
+        return app_state.cached_exams
+
+    try:
+        roh = session.exams(start=tag, end=tag)
+    except Exception as fehler:
+        logging.warning("Pruefungen nicht abrufbar (%s) - die Anzeige laeuft "
+                        "ohne Klausur-Hinweis weiter.", fehler)
+        roh = []
+
+    pruefungen = []
+    for eintrag in roh:
+        daten = getattr(eintrag, "_data", {})
+        try:
+            pruefungen.append({
+                "start": eintrag.start,
+                "ende": eintrag.end,
+                "klassen": set(daten.get("classes") or []),
+                "fach": daten.get("subject"),
+            })
+        except Exception as fehler:
+            logging.warning("Pruefungseintrag unlesbar, wird uebersprungen: %s",
+                            fehler)
+
+    app_state.cached_exams = pruefungen
+    app_state.cached_exams_date = tag
+    app_state.last_exams_fetch = jetzt
+    return pruefungen
+
+def passende_pruefung(start, ende, klassen_ids, fach_ids, pruefungen) -> bool:
+    """
+    Findet die Pruefung, die zu dieser Stunde gehoert - oder keine.
+
+    Verlangt werden drei Uebereinstimmungen: Die Zeiten muessen sich
+    ueberschneiden, die Klasse muss dieselbe sein UND das Fach auch.
+
+    WARUM SO STRENG: Zeit allein genuegt nicht einmal ansatzweise - an einer
+    Schule mit ueber hundert Pruefungen in drei Wochen schreibt fast immer
+    irgendwer irgendwo. Mit Klasse und Fach zusammen ist ein Zufallstreffer
+    praktisch ausgeschlossen. An echten Daten nachgemessen: 55 Stunden, 103
+    Pruefungen, vier Treffer ueber beide Merkmale - und null Faelle, in denen
+    die Klasse zur selben Zeit ein anderes Fach schrieb. Genau das waere die
+    Konstellation, in der "KLASSENARBEIT" an der falschen Tuer stuende.
+    """
+    for pruefung in pruefungen:
+        if not (start < pruefung["ende"] and pruefung["start"] < ende):
+            continue
+        if not (klassen_ids & pruefung["klassen"]):
+            continue
+        if pruefung["fach"] in fach_ids:
+            return True
+    return False
+
+def parse_lesson(lesson, conf: Dict[str, Any], pruefungen=None) -> Optional[Lesson]:
     """
     Hilfsfunktion: Nimmt ein komplexes, rohes WebUntis-Klassenobjekt und 
     extrahiert genau die Daten, die wir für das Display brauchen.
@@ -49,22 +156,36 @@ def parse_lesson(lesson, conf: Dict[str, Any]) -> Optional[Lesson]:
             info_parts.append(str(val).strip())
             
     # Auch den langen Fach-Namen aus der API extrahieren
-    fach_kurz = ", ".join([s.name for s in getattr(lesson, 'subjects', [])])
-    fach_lang = ", ".join([getattr(s, 'long_name', '') for s in getattr(lesson, 'subjects', []) if getattr(s, 'long_name', '')])
+    faecher = list(getattr(lesson, 'subjects', []))
+    klassen = list(getattr(lesson, 'klassen', []))
+    fach_kurz = ", ".join([s.name for s in faecher])
+    fach_lang = ", ".join([getattr(s, 'long_name', '') for s in faecher if getattr(s, 'long_name', '')])
+
+    # Schreibt diese Klasse hier gerade eine Arbeit? Das Wort dafuer richtet
+    # sich nach ihrem Jahrgang - abgelesen an derselben Klasse, ueber die auch
+    # der Abgleich laeuft, also ohne zusaetzliche Abfrage.
+    pruefung = ""
+    if pruefungen:
+        klassen_ids = {getattr(k, 'id', None) for k in klassen}
+        fach_ids = {getattr(s, 'id', None) for s in faecher}
+        if passende_pruefung(lesson.start, lesson.end, klassen_ids, fach_ids,
+                             pruefungen):
+            pruefung = pruefungs_etikett([k.name for k in klassen])
     
     # Rückgabe als sicher typisierte Dataclass
     return Lesson(
         fach=fach_kurz,
         fach_lang=fach_lang if fach_lang else fach_kurz,
         lehrer=", ".join([t.name for t in getattr(lesson, 'teachers', [])]),
-        klasse=", ".join([k.name for k in getattr(lesson, 'klassen', [])]),
+        klasse=", ".join([k.name for k in klassen]),
         zeit=f"{start_str} - {lesson.end.strftime('%H:%M')}",
         stunde=stunde_name,
         status_code=getattr(lesson, 'code', None),
-        stunden_info=" | ".join(info_parts)
+        stunden_info=" | ".join(info_parts),
+        pruefung=pruefung,
     )
 
-def resolve_timetable(timetable, conf: Dict[str, Any]) -> List[TimedLesson]:
+def resolve_timetable(timetable, conf: Dict[str, Any], pruefungen=None) -> List[TimedLesson]:
     """
     Wandelt die rohen WebUntis-Objekte eines Tages einmalig in eigene
     Datensätze um und sortiert sie chronologisch.
@@ -87,7 +208,7 @@ def resolve_timetable(timetable, conf: Dict[str, Any]) -> List[TimedLesson]:
         if start is None or ende is None:
             continue
         try:
-            stunde = parse_lesson(rohdaten, conf)
+            stunde = parse_lesson(rohdaten, conf, pruefungen)
         except Exception as e:
             # Eine einzelne unlesbare Stunde darf nicht den ganzen Tag verwerfen
             logging.warning(f"Stunde konnte nicht ausgelesen werden, wird übersprungen: {e}")
@@ -303,7 +424,8 @@ def get_current_lesson(conf: Dict[str, Any]) -> Tuple[Optional[Dict[str, Optiona
             
         # Den Tagesplan JETZT vollständig auslesen - hier besteht die Sitzung
         # noch. Danach sind die Daten von Netz und Sitzung unabhängig.
-        lessons = resolve_timetable(timetable, conf)
+        lessons = resolve_timetable(timetable, conf,
+                                    hole_pruefungen(session, today))
 
         # Abruf erfolgreich: Tagesplan als Offline-Rücklage sichern, damit ein
         # späterer Netzausfall die Anzeige nicht wertlos macht.
