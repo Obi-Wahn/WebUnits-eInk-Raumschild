@@ -64,9 +64,12 @@ def uhrzeit(stunde: int, minute: int) -> datetime.datetime:
 class Referenz:
     """Bildet ein Fach-, Lehrkraft- oder Klassen-Objekt der Bibliothek nach."""
 
-    def __init__(self, name, long_name=""):
+    def __init__(self, name, long_name="", id=None):
         self.name = name
         self.long_name = long_name or name
+        # Die Nummer braucht der Pruefungs-Abgleich: In den Pruefungsdaten
+        # stehen nur Nummern, keine Namen.
+        self.id = id
 
 
 class RohStunde:
@@ -81,7 +84,7 @@ class RohStunde:
     """
 
     def __init__(self, h1, m1, h2, m2, fach, sitzung_lebt=None, code=None,
-                 lehrer="Ab", klasse="9B", info=""):
+                 lehrer="Ab", klasse="9B", info="", fach_id=None, klasse_id=None):
         self.start = datetime.datetime.combine(MONTAG, datetime.time(h1, m1))
         self.end = datetime.datetime.combine(MONTAG, datetime.time(h2, m2))
         self.code = code
@@ -91,6 +94,8 @@ class RohStunde:
         self._fach = fach
         self._lehrer = lehrer
         self._klasse = klasse
+        self._fach_id = fach_id
+        self._klasse_id = klasse_id
         # Liste statt bool, damit der Test den Wert nachtraeglich umschalten kann
         self._lebt = sitzung_lebt if sitzung_lebt is not None else [True]
 
@@ -101,7 +106,7 @@ class RohStunde:
     @property
     def subjects(self):
         self._pruefe_sitzung()
-        return [Referenz(self._fach, self._fach)]
+        return [Referenz(self._fach, self._fach, id=self._fach_id)]
 
     @property
     def teachers(self):
@@ -111,7 +116,7 @@ class RohStunde:
     @property
     def klassen(self):
         self._pruefe_sitzung()
-        return [Referenz(self._klasse)] if self._klasse else []
+        return [Referenz(self._klasse, id=self._klasse_id)] if self._klasse else []
 
 
 class DisplayAttrappe:
@@ -181,6 +186,7 @@ def sauberer_zustand():
         "current_display_msg", "force_update_flag", "show_demo_once",
         "test_mode_active", "cached_config", "last_config_mtime",
         "cached_holidays", "last_holidays_fetch",
+        "cached_exams", "cached_exams_date", "last_exams_fetch",
         "stoerung_seit", "stoerung_gemeldet",
         "save_error", "save_ok",
     ]

@@ -29,6 +29,11 @@ class Lesson:
     stunde: str
     status_code: Optional[str]
     stunden_info: str
+    # Etikett einer Leistungserhebung ("KLASSENARBEIT"/"KLAUSUR"), sonst leer.
+    # Es steckt im Datensatz und nicht nur im Bild, damit die Offline-Rücklage
+    # es mitträgt: Faellt WebUntis waehrend einer Arbeit aus, soll an der Tuer
+    # weiter stehen, dass drinnen geschrieben wird.
+    pruefung: str = ""
 
 @dataclass
 class TimedLesson:
@@ -79,6 +84,12 @@ class AppState:
         self.last_config_mtime: float = 0
         self.cached_holidays = None
         self.last_holidays_fetch: float = 0
+        # Klausurtermine des Tages - wie die Ferien zwischengespeichert, aber
+        # mit dem Datum als Teil des Schluessels: Ein ueber Mitternacht
+        # laufendes Geraet duerfte sonst die Termine von gestern anzeigen.
+        self.cached_exams = None
+        self.cached_exams_date = None
+        self.last_exams_fetch: float = 0
         self.global_fonts: Dict[str, ImageFont.FreeTypeFont] = {}
 
         # Offline-Rücklage: der zuletzt erfolgreich abgerufene Tagesplan,
