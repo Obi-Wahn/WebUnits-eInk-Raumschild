@@ -33,7 +33,7 @@ sudo apt install -y python3-pip python3-venv git libopenjp2-7 libtiff-dev libxcb
 Laden Sie zunächst das Projekt selbst herunter. Über `git clone` erhalten Sie alle Programmdateien auf einmal und können spätere Aktualisierungen bequem mit `git pull` einspielen:
 
 cd ~  
-git clone https://github.com/Obi-Wahn/WebUnits-eInk-Raumschild.git webuntis-display  
+git clone https://github.com/Obi-Wahn/WebUntis-eInk-Raumschild.git webuntis-display  
 cd webuntis-display
 
 Laden Sie anschließend die Hardware-Treiber für das Waveshare-Display herunter. Diese liegen in einem eigenen Repository des Herstellers und sind bewusst nicht Teil dieses Projekts:
